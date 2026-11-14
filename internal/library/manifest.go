@@ -39,7 +39,14 @@ type Manifest struct {
 	// PlaylistSums holds, per playlist name, the PlaylistSum of the song paths last written for it:
 	// a playlist whose songs or order changed is written again though no song moves (I10).
 	PlaylistSums map[string]string `json:",omitempty"`
+	// PlaylistArt holds, per playlist name, the picture written beside its .m3u for Q2 Pod's
+	// playlist art: the only pictures in _explaylist_data the app may write or delete.
+	PlaylistArt map[string]Art `json:",omitempty"`
 }
+
+// Art is a playlist picture on the card: its file, the server's cover id it came from, and a
+// digest of its bytes.
+type Art struct{ File, ID, Sum string }
 
 // LoadManifest reads path; a missing file is an empty manifest.
 func LoadManifest(path string) (*Manifest, error) {
@@ -58,6 +65,9 @@ func LoadManifest(path string) (*Manifest, error) {
 	}
 	if m.PlaylistSums == nil {
 		m.PlaylistSums = map[string]string{}
+	}
+	if m.PlaylistArt == nil {
+		m.PlaylistArt = map[string]Art{}
 	}
 	if m.Imported == nil { // an older manifest: its playlists were imported by name-replacing requests
 		m.Imported = map[string]bool{}

@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/andsuor/q2-subsonic/internal/applog"
 	"github.com/andsuor/q2-subsonic/internal/fw"
 	"github.com/andsuor/q2-subsonic/internal/library"
 	"github.com/andsuor/q2-subsonic/internal/plan"
@@ -278,6 +279,7 @@ func (d *daemon) computePreview(ctx context.Context, cl *subsonic.Client, p *pre
 			}
 		}
 		pl.Hold(gone)
+		pl.Art(playlistArt(ctx, cl, names, d.log), d.manifest())
 		planning = lap()
 		// The items holding songs already on the card, recorded now: an up-to-date preview starts
 		// no sync, and status reads them after a restart (I12). A running sync records its own.
@@ -294,6 +296,31 @@ func (d *daemon) computePreview(ctx context.Context, cl *subsonic.Client, p *pre
 		d.gone = gone
 	}
 	d.mu.Unlock()
+}
+
+// playlistArt maps each chosen playlist's name (names: item key -> name) to its cover id, for the
+// picture Q2 Pod shows beside it. Without the list (an error is logged) no picture changes.
+func playlistArt(ctx context.Context, cl *subsonic.Client, names map[string]string, log *applog.Log) map[string]string {
+	prefix := selection.Key(selection.KindPlaylist, "")
+	some := false
+	for key := range names {
+		some = some || strings.HasPrefix(key, prefix)
+	}
+	if !some {
+		return nil
+	}
+	pls, err := cl.Playlists(ctx)
+	if err != nil {
+		log.Printf("sync: playlist art: %v", err)
+		return nil
+	}
+	ids := map[string]string{}
+	for _, p := range pls {
+		if name, ok := names[selection.Key(selection.KindPlaylist, p.ID)]; ok && p.CoverArt != "" {
+			ids[name] = p.CoverArt
+		}
+	}
+	return ids
 }
 
 // changes reports whether p has anything to do: a song to move, or a playlist file to write or delete.

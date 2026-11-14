@@ -83,6 +83,10 @@ func (f *fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Write(bytes.Repeat([]byte("j"), 16<<20+1))
 			return
 		}
+		if strings.HasPrefix(id, "png") {
+			w.Write([]byte("\x89PNG-" + id))
+			return
+		}
 		w.Write([]byte("jpeg-" + id))
 		return
 	}
@@ -1577,5 +1581,72 @@ func TestRunRefetchesReRip(t *testing.T) {
 	sameFile(t, a.Path, "a")
 	if e := manifest(t, root).Songs["a"]; e.SrcSize != 5000 {
 		t.Fatalf("%+v", e)
+	}
+}
+
+// A playlist's picture goes beside its .m3u, named as it (Q2 Pod's playlist art): written when its
+// bytes change, renamed with its format, removed with its playlist, and a picture of the user's
+// with that name is left alone.
+func TestPlaylistArt(t *testing.T) {
+	_, r, root := setup(t)
+	mix, mine := root+"/_explaylist_data/Mix.jpg", root+"/_explaylist_data/Mine.jpg"
+	put(t, mine, "user")
+	run := func(p plan.Plan) *library.Manifest {
+		t.Helper()
+		if err := r.Start(p); err != nil {
+			t.Fatal(err)
+		}
+		if s := wait(t, r); s.State != "done" {
+			t.Fatalf("%+v", s)
+		}
+		return manifest(t, root)
+	}
+	both := map[string][]string{"Mix": nil, "Mine": nil}
+	m := run(plan.Plan{Playlists: both, PlaylistArt: map[string]string{"Mix": "pl-1", "Mine": "pl-2"}})
+	if b, _ := os.ReadFile(mix); string(b) != "jpeg-pl-1" {
+		t.Fatalf("%q", b)
+	}
+	if b, _ := os.ReadFile(mine); string(b) != "user" {
+		t.Fatal("user's picture changed")
+	}
+	if a := m.PlaylistArt["Mix"]; a.File != mix || a.ID != "pl-1" || a.Sum == "" || len(m.PlaylistArt) != 1 {
+		t.Fatalf("%+v", m.PlaylistArt)
+	}
+	old := time.Unix(1_700_000_000, 0)
+	os.Chtimes(mix, old, old)
+	m = run(plan.Plan{Playlists: both, PlaylistArt: map[string]string{"Mix": "pl-1"}}) // the same bytes
+	if after, _ := os.Stat(mix); !after.ModTime().Equal(old) {
+		t.Fatal("same picture written again", after.ModTime())
+	}
+	m = run(plan.Plan{Playlists: both, PlaylistArt: map[string]string{"Mix": "png-1"}})
+	png := root + "/_explaylist_data/Mix.png"
+	if b, _ := os.ReadFile(png); string(b) != "\x89PNG-png-1" {
+		t.Fatalf("%q", b)
+	}
+	if _, err := os.Stat(mix); !os.IsNotExist(err) || m.PlaylistArt["Mix"].File != png {
+		t.Fatal("old picture left", m.PlaylistArt)
+	}
+	m = run(plan.Plan{Playlists: map[string][]string{"Mine": nil}})
+	if _, err := os.Stat(png); !os.IsNotExist(err) || len(m.PlaylistArt) != 0 {
+		t.Fatal("picture left with its playlist gone", m.PlaylistArt)
+	}
+	if b, _ := os.ReadFile(mine); string(b) != "user" {
+		t.Fatal("user's picture changed")
+	}
+}
+
+// A picture that can't be written (a full card) is logged and passed over: the sync goes on to
+// its removals, and nothing is recorded for it.
+func TestPlaylistArtWriteFailureGoesOn(t *testing.T) {
+	_, r, root := setup(t)
+	os.MkdirAll(root+"/_explaylist_data/Mix.jpg.tmp", 0o755) // the atomic write's temp can't be made
+	if err := r.Start(plan.Plan{Playlists: map[string][]string{"Mix": nil}, PlaylistArt: map[string]string{"Mix": "pl-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if s := wait(t, r); s.State != "done" {
+		t.Fatalf("%+v", s)
+	}
+	if m := manifest(t, root); len(m.PlaylistArt) != 0 || m.Playlists["Mix"] == "" {
+		t.Fatalf("%+v %+v", m.PlaylistArt, m.Playlists)
 	}
 }

@@ -392,3 +392,22 @@ func TestPlanKeepBackfillsAlbum(t *testing.T) {
 		t.Errorf("keep once recorded: %+v", p.Keep)
 	}
 }
+
+// A playlist's cover counts as a change when the card has none from that id, or has it under a
+// name its .m3u no longer has; an unchanged one, or one of a playlist not chosen, does not.
+func TestArtCountsChanges(t *testing.T) {
+	root := "/mnt/mmc"
+	m := &library.Manifest{Playlists: map[string]string{"A": root + "/_explaylist_data/A.m3u",
+		"B": root + "/_explaylist_data/B (Subsonic).m3u", "C": root + "/_explaylist_data/C.m3u"},
+		PlaylistArt: map[string]library.Art{"A": {File: root + "/_explaylist_data/A.jpg", ID: "a"},
+			"B": {File: root + "/_explaylist_data/B.jpg", ID: "b"}, "C": {File: root + "/_explaylist_data/C.png", ID: "c"}}}
+	p := Plan{Playlists: map[string][]string{"A": nil, "B": nil, "C": nil, "D": nil}}
+	p.Art(map[string]string{"A": "a", "B": "b", "C": "c2", "D": "d", "E": "e"}, m)
+	if p.PlaylistsChanged != 3 { // B moved, C's id changed, D new; A unchanged, E not chosen
+		t.Fatal(p.PlaylistsChanged)
+	}
+	p = Plan{PlaylistsChanged: 1, Playlists: map[string][]string{"D": nil}, changed: map[string]bool{"D": true}}
+	if p.Art(map[string]string{"D": "d"}, m); p.PlaylistsChanged != 1 { // its songs changed too: one playlist
+		t.Fatal(p.PlaylistsChanged)
+	}
+}

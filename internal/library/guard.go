@@ -33,8 +33,9 @@ func resolve(p string) string {
 }
 
 // Owned reports whether path is strictly inside what the app may touch under root: Subsonic/,
-// .subsonic/, and in _explaylist_data/ only the .m3u files recorded in m.Playlists (m may be nil)
-// plus legacy "Navidrome - *.m3u" files, which exist only to be migrated away.
+// .subsonic/, and in _explaylist_data/ only the .m3u files recorded in m.Playlists and the pictures
+// recorded in m.PlaylistArt (m may be nil), plus legacy "Navidrome - *.m3u" files, which exist only
+// to be migrated away.
 func Owned(root, path string, m *Manifest) bool {
 	parts := relParts(root, path)
 	if parts == nil {
@@ -44,7 +45,18 @@ func Owned(root, path string, m *Manifest) bool {
 	case "Subsonic", ".subsonic":
 		return len(parts) > 1
 	case "_explaylist_data":
-		if len(parts) != 2 || !strings.HasSuffix(parts[1], ".m3u") {
+		if len(parts) != 2 {
+			return false
+		}
+		if m != nil && ValidArtFile(root, path) {
+			for _, a := range m.PlaylistArt {
+				if filepath.Clean(a.File) == filepath.Clean(path) {
+					return true
+				}
+			}
+			return false
+		}
+		if !strings.HasSuffix(parts[1], ".m3u") {
 			return false
 		}
 		if strings.HasPrefix(parts[1], "Navidrome - ") {
@@ -83,6 +95,26 @@ func ValidPlaylistFile(root, f string) bool {
 	b := filepath.Base(f)
 	return filepath.Clean(f) == f && filepath.Dir(f) == filepath.Join(root, "_explaylist_data") &&
 		strings.HasSuffix(b, ".m3u") && b != ".m3u"
+}
+
+// ValidArtFile reports whether f is exactly <root>/_explaylist_data/<name>.jpg or .png in Clean
+// form, the only shape a recorded playlist picture may have.
+func ValidArtFile(root, f string) bool {
+	b, ext := filepath.Base(f), filepath.Ext(f)
+	return filepath.Clean(f) == f && filepath.Dir(f) == filepath.Join(root, "_explaylist_data") &&
+		(ext == ".jpg" || ext == ".png") && b != ext
+}
+
+// ArtFile is the picture beside playlist file f (a .m3u) that Q2 Pod shows for it: the playlist's
+// name is the file's, so the picture is that name with ext.
+func ArtFile(f, ext string) string { return strings.TrimSuffix(f, filepath.Ext(f)) + ext }
+
+// WriteArt writes a playlist picture recorded in m.PlaylistArt, atomically.
+func (m *Manifest) WriteArt(root, path string, data []byte) error {
+	if err := checkOwned(root, path, m); err != nil {
+		return err
+	}
+	return q2.WriteFile(path, data)
 }
 
 // checkOwned is the gate for every write and delete: path must already be in Clean form (so the

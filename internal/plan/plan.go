@@ -34,12 +34,14 @@ type Plan struct {
 	Rename               []Move
 	Remove               []*library.Entry
 	Playlists            map[string][]string
-	PlaylistsStale       bool // recorded .m3u files hold old paths: rewrite them all, even with no song change
-	PlaylistsChanged     int  // playlist files to write or delete though no song moves: new, changed, renamed or taken out (I10)
+	PlaylistsStale       bool              // recorded .m3u files hold old paths: rewrite them all, even with no song change
+	PlaylistsChanged     int               // playlist files to write or delete though no song moves: new, changed, renamed or taken out (I10)
+	PlaylistArt          map[string]string // playlist name -> the server's cover id, whose picture goes beside its .m3u
 	NeedBytes, FreeBytes int64
 	ReplaceBytes         int64 // what the replaces add, or free when negative
 	Fits                 bool
-	Held                 int // chosen items the server no longer has, whose songs stay (Hold)
+	Held                 int             // chosen items the server no longer has, whose songs stay (Hold)
+	changed              map[string]bool // the playlists PlaylistsChanged counts, so Art counts each once
 }
 
 // Hold keeps on the card the songs of held items (item keys): chosen, but gone from the server.
@@ -50,6 +52,20 @@ func (p *Plan) Hold(held map[string]bool) {
 	p.Remove = slices.DeleteFunc(p.Remove, func(e *library.Entry) bool {
 		return slices.ContainsFunc(e.Items, func(k string) bool { return held[k] })
 	})
+}
+
+// Art sets the playlists' cover ids (name -> id) and counts each whose picture the card lacks,
+// holds from another id, or holds under a name its .m3u no longer has as a playlist change, so a
+// new or changed cover alone starts a sync.
+func (p *Plan) Art(ids map[string]string, m *library.Manifest) {
+	p.PlaylistArt = ids
+	for name, id := range ids {
+		a := m.PlaylistArt[name]
+		moved := a.File != "" && a.File != library.ArtFile(m.Playlists[name], filepath.Ext(a.File))
+		if _, ok := p.Playlists[name]; ok && id != "" && (a.ID != id || moved) && !p.changed[name] {
+			p.PlaylistsChanged++
+		}
+	}
 }
 
 func rank(q string) int {
@@ -187,7 +203,7 @@ func Compute(sel selection.Set, resolved map[string][]subsonic.Song, playlistNam
 	}
 	p.NeedBytes += CoverNeed(m, append(append([]Want(nil), p.Add...), p.Replace...))
 
-	p.Playlists = map[string][]string{}
+	p.Playlists, p.changed = map[string][]string{}, map[string]bool{}
 	p.PlaylistsStale = m.PlaylistsStale
 	for _, it := range sel.Items {
 		if it.Kind != selection.KindPlaylist {
@@ -203,6 +219,7 @@ func Compute(sel selection.Set, resolved map[string][]subsonic.Song, playlistNam
 	for name, paths := range p.Playlists {
 		if f := m.Playlists[name]; f == "" || library.StalePlaylistFile(f) || m.PlaylistSums[name] != library.PlaylistSum(paths) {
 			p.PlaylistsChanged++
+			p.changed[name] = true
 		}
 	}
 	for name := range m.Playlists {

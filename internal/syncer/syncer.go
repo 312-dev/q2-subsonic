@@ -6,8 +6,11 @@
 package syncer
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -718,9 +721,20 @@ func (j *job) playlists() error {
 			library.Remove(j.root, library.LegacyPlaylistFile(j.root, name))
 		}
 	}
+	for _, name := range names {
+		if err := j.check(j.ctx); err != nil {
+			return err
+		}
+		if err := j.art(name); err != nil {
+			return err
+		}
+	}
 	if !j.failed {
 		for name, f := range m.Playlists {
 			if _, ok := p.Playlists[name]; !ok {
+				if a, ok := m.PlaylistArt[name]; ok && m.Remove(j.root, a.File) == nil {
+					delete(m.PlaylistArt, name)
+				}
 				if m.Remove(j.root, f) == nil {
 					delete(m.Playlists, name)
 					delete(m.PlaylistSums, name)
@@ -1178,6 +1192,91 @@ func (r *Runner) cover(ctx context.Context, w plan.Want) {
 }
 
 const maxCover = 16 << 20
+
+// art puts playlist name's picture beside its .m3u, named as it, for Q2 Pod's playlist art: the
+// server's own picture for the playlist, or the one it makes from album covers. It is fetched at
+// every sync, as the server can change a picture without a new cover id, and written only when
+// its bytes changed. A picture of the user's with that name is left alone. A failure to fetch is
+// logged and the sync goes on; only a card error stops it.
+func (j *job) art(name string) error {
+	m, id := j.m, j.p.PlaylistArt[name]
+	if id == "" {
+		return nil
+	}
+	b, err := func() ([]byte, error) {
+		if err := j.Net.Acquire(j.ctx, false); err != nil {
+			return nil, err
+		}
+		defer j.Net.Release()
+		resp, err := j.src.Get(j.ctx, sized(j.src.CoverURL(id)), 0)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(io.LimitReader(resp.Body, maxCover+1))
+		if err == nil && len(b) > maxCover {
+			err = errors.New("larger than 16 MiB")
+		}
+		return b, err
+	}()
+	if err != nil {
+		if j.ctx.Err() == nil {
+			j.logf("sync: playlist art for %s: %v", name, err)
+		}
+		return nil
+	}
+	ext := ".jpg"
+	if bytes.HasPrefix(b, []byte("\x89PNG")) {
+		ext = ".png"
+	}
+	f := library.ArtFile(m.Playlists[name], ext)
+	h := sha256.Sum256(b)
+	sum := hex.EncodeToString(h[:8])
+	old, had := m.PlaylistArt[name]
+	if _, err := os.Lstat(f); err == nil {
+		if !had || old.File != f {
+			j.logf("sync: playlist art: %s is not the app's, left alone", f)
+			return nil
+		}
+		if old.Sum == sum {
+			if old.ID != id {
+				m.PlaylistArt[name] = library.Art{File: f, ID: id, Sum: sum}
+				j.unsaved++
+			}
+			return nil
+		}
+	}
+	if had && old.File != f { // its playlist file or its format changed: the old picture goes first
+		if err := m.Remove(j.root, old.File); err != nil {
+			j.logf("sync: playlist art: remove %s: %v", old.File, err)
+		}
+	}
+	// Recorded before it is written, as the .m3u files are, so the guard lets it through and a
+	// stop part-way never leaves a written picture the next sync takes for the user's.
+	m.PlaylistArt[name] = library.Art{File: f}
+	if err := j.save(); err != nil {
+		return err
+	}
+	if err := m.WriteArt(j.root, f, b); err != nil {
+		// Only a card gone stops the sync: a full card would otherwise stop it here at every try,
+		// before the removals that free space.
+		if err = j.cardErr(err); errors.Is(err, q2.ErrNoCard) {
+			return err
+		}
+		j.logf("sync: playlist art: write %s: %v", f, err)
+		if had && old.File == f { // the write is atomic: the old picture is still there
+			m.PlaylistArt[name] = old
+		} else {
+			delete(m.PlaylistArt, name)
+		}
+		j.unsaved++
+		return nil
+	}
+	m.PlaylistArt[name] = library.Art{File: f, ID: id, Sum: sum}
+	j.unsaved++
+	j.op("playlist art", f)
+	return nil
+}
 
 // sized asks getCoverArt for 600 px: the original can be many megabytes (M19), which the plan's
 // space estimate doesn't count.
