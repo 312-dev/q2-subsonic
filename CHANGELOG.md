@@ -6,6 +6,11 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ## [Unreleased]
 
+### Added
+
+- **Settings → Show in Library** puts your server's songs and playlists in the Q2's own Library, beside the songs on the card, with the Q2's **Library → Local + Server**. Songs you synced show once. A server song plays as the app's lists do, from the Stream Cache when it is there; if the server is lost while a list plays, the songs not on the card are left out and the rest play on. The first time, the app asks for every song, 500 at a time, with no limit on the library's size; later it asks again only when the server says its library changed, once the Q2 is idle or charging, or when you press **Settings → Resync Library**. A song the server no longer has stays while the Stream Cache keeps it. Off by default. Requires a Q2 Pod with the server library (the `catalogue` extension); on older Q2 Pod the row is not there and nothing changes.
+- Hearts given to a song on the Q2 become its rating on the server, and five hearts star it; ratings and stars changed on the server reach the Q2. A change made while the server is out of reach is sent when it answers again. Requires a Q2 Pod with the `ratings` extension and Show in Library on; on older Q2 Pod hearts stay on the Q2.
+
 ## [0.7] - 2026-11-12
 
 ### Fixed

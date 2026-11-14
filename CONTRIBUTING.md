@@ -33,6 +33,8 @@ In the order data flows:
 | `internal/syncer` | Runs a sync: `.part` files renamed when done, resume, deletes last |
 | `internal/library` | Card layout `Subsonic/…`, the manifest, `.m3u` files and the ownership guard: every card write or delete goes through it |
 | `internal/fw` | The firmware's capabilities and the library update request |
+| `internal/catalogue` | The Server Library's files: the walk of every song, `catalogue.tsv`, `catalogue.avail`, `ratings.out` and `ratings.in` (Q2 Pod's `docs/server-library.md`) |
+| `internal/fakesonic` | An OpenSubsonic server for tests |
 | `cmd/q2-subsonic` | The daemon: Q2 screens (`device*.go`), phone sign-in, streaming |
 | `contrib/shanlingq2` | Build, packaging and the card's launcher |
 
@@ -40,7 +42,7 @@ The app is a Q2 Pod card app: the firmware draws every screen from the rows the 
 
 ## Changelog
 
-Every change a user can notice adds a bullet under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md), in the right subsection (`### Added`, `### Changed`, `### Fixed`, `### Removed`, `### Security`). Write it for someone using the app on a Q2: what they see or can now do, not function names. One bullet per change. If it needs a firmware capability (`playlist`, `progress`, `library`, `pages` in `/tmp/q2-addon.caps`), end the bullet with "Requires Q2 Pod 1.5.9 or later" (or the version that added the capability) and what the app does on older Q2 Pod.
+Every change a user can notice adds a bullet under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md), in the right subsection (`### Added`, `### Changed`, `### Fixed`, `### Removed`, `### Security`). Write it for someone using the app on a Q2: what they see or can now do, not function names. One bullet per change. If it needs a firmware capability (`playlist`, `progress`, `library`, `pages`, `catalogue`, `ratings` in `/tmp/q2-addon.caps`), end the bullet with "Requires Q2 Pod 1.5.9 or later" (or the version that added the capability) and what the app does on older Q2 Pod.
 
 Changes users can't notice (tests, refactors, CI) need no bullet: label the pull request `no changelog`. CI checks this.
 

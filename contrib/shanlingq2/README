@@ -9,7 +9,8 @@ Subsonic (OpenSubsonic API) client that syncs and streams. Built from q2-filebro
   package.py   checks the binary (static, MIPS32 little-endian, soft-float ABI), sets the nan2008
                ELF flag the Q2's kernel requires and Go doesn't, and writes the ZIP
   launcher.sh  installed as .subsonic/run: q2-subsonic copied to /tmp and run there in a restart loop
-  q2app        installed as .subsonic/q2app: the card app manifest (name=Subsonic, qr=0)
+  q2app        installed as .subsonic/q2app: the card app manifest (name=Subsonic, qr=0,
+               catalogue=1 and ratings=1 for the server library)
   icon.png, icon-40.png
                Streaming's row icon, 52 px (Legacy) and 40 px (iPod); placeholders
   test_launcher.py
