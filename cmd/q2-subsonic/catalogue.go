@@ -132,13 +132,14 @@ func (d *daemon) covers() catalogue.Covers {
 	return catalogue.Covers{Card: d.card, Dir: filepath.Join(d.dir, catalogue.CoversName)}
 }
 
-// slCovers is a round of the catalogue's album covers (catalogue.Covers): while the Q2 is idle or
-// charging and the server answers, the albums the folder lacks are asked for, slCoverConc at a
-// time and for slCoverPass at most, through the network slot a sync or a stream takes first. What
-// was saved stays, so the next round, a minute on, goes on from there. A cover the server says it
-// hasn't is noted and not asked again; a lost server ends the round.
+// slCovers is a round of the catalogue's album covers (catalogue.Covers): while the app's network
+// is quiet (slQuiet) or the Q2 charges, and the server answers, the albums the folder lacks are
+// asked for, slCoverConc at a time and for slCoverPass at most, through the network slot a sync or
+// a stream takes first. What was saved stays, so the next round, a minute on, goes on from there.
+// A cover the server says it hasn't is noted and not asked again; a lost server ends the round,
+// and so does a sync starting or a song of the stream to fetch.
 func (d *daemon) slCovers(cl *subsonic.Client) {
-	if !d.slIdle() && !charging() {
+	if !d.slQuiet() && !charging() {
 		return
 	}
 	b := catalogue.Build{Card: d.card, App: appID, Account: d.acct(), Synced: d.syncedPaths(), Local: d.stream.copies()}
@@ -192,7 +193,7 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 		mu.Lock()
 		stop := lost != nil
 		mu.Unlock()
-		if stop || ctx.Err() != nil || !d.slIdle() && !charging() || !d.slActive() {
+		if stop || ctx.Err() != nil || !d.slQuiet() && !charging() || !d.slActive() {
 			break
 		}
 		select {
@@ -266,7 +267,14 @@ func (d *daemon) slPinged(err error) {
 	}
 }
 
+// slIdle is whether the Q2 is idle for a walk: no sync runs and no list streams. A walk ends in a
+// new catalogue, which the firmware imports, so it waits until nothing plays.
 func (d *daemon) slIdle() bool { return !d.runner.Busy() && !d.stream.active() }
+
+// slQuiet is whether a cover may be fetched: no sync runs and the stream has no song to fetch
+// (streamer.busy). A list playing what it already fetched, or a song played from the cache, is
+// quiet: covers are a few KB each and wait for the network slot syncs and streams take first.
+func (d *daemon) slQuiet() bool { return !d.runner.Busy() && !d.stream.busy() }
 
 func charging() bool {
 	b, _ := os.ReadFile(batteryStatus)

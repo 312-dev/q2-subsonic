@@ -436,3 +436,31 @@ func TestCatalogueCovers(t *testing.T) {
 }
 
 func sorted(s []string) []string { slices.Sort(s); return s }
+
+// Covers are fetched while a list plays what it already fetched (the stream is active but moves
+// no data), and wait while a song of the stream is still to fetch.
+func TestCoversWhileAListPlays(t *testing.T) {
+	r := newCatRig(t, "catalogue", fakesonic.Library(30)) // ten albums
+	r.f.Mu.Lock()
+	r.f.Covers = map[string][]byte{"al0": testJPEG(t, 160), "al1": testJPEG(t, 160)}
+	r.f.Mu.Unlock()
+	batteryStatus = filepath.Join(r.tmp, "battery")
+	t.Cleanup(func() { batteryStatus = "/sys/class/power_supply/battery/status" })
+	os.WriteFile(batteryStatus, []byte("Discharging\n"), 0o644)
+	r.check(t) // the first copy and the catalogue
+	// a list plays, its window fetched: the stream's run, standing still
+	done := make(chan struct{})
+	r.stream.mu.Lock()
+	r.stream.done, r.stream.cancel = done, func() { close(done) }
+	r.stream.mu.Unlock()
+	r.stream.xfer.Store(true) // a song of it still to fetch
+	r.check(t)
+	if n := r.calls("getCoverArt"); n != 0 || !r.stream.active() {
+		t.Fatal("covers while the stream fetches:", n)
+	}
+	r.stream.xfer.Store(false)
+	r.check(t)
+	if n := r.calls("getCoverArt"); n != 10 || !r.stream.active() {
+		t.Fatal("covers while the list plays from what it fetched:", n)
+	}
+}
