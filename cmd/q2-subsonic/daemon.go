@@ -327,9 +327,9 @@ func newDaemon(dir, card, tmp string) *daemon {
 	if c, ok := creds.Load(dir); ok {
 		keep = acctDir(c.Server, c.User)
 	}
-	d.spawn(func() { d.stream.sweep(keep) })
-	d.stream.avail, d.stream.pinged = d.slAvail, d.slPinged
+	d.stream.avail, d.stream.pinged = d.slAvail, d.slPinged // before the sweep, whose drops tell avail
 	d.slInit()
+	d.spawn(func() { d.stream.sweep(keep) })
 	d.art = newArtCache(d, filepath.Join(tmp, "q2-subsonic.art"))
 	d.state.Write(nil)
 	d.migrateErr, d.migrateAt = library.Migrate(card, lg.Printf), time.Now()

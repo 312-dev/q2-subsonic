@@ -26,10 +26,9 @@ import (
 // the Q2 and the server. Without the words nothing of this is written.
 
 const (
-	appID      = "subsonic" // the app's folder is .<appID>, its /tmp files q2-<appID>.*
-	slEvery    = time.Minute
-	slPingIn   = 10 * time.Second
-	catplayFor = 10 * time.Second // a .catplay older than this at start-up was answered, or given up, already
+	appID    = "subsonic"  // the app's folder is .<appID>, its /tmp files q2-<appID>.*
+	slEvery  = time.Minute // the server is pinged this often while Show in Library is on
+	slPingIn = 10 * time.Second
 )
 
 // batteryStatus is where the Q2's charger says whether it charges (the AXP2101's battery supply).
