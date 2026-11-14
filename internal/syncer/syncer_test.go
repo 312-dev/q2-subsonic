@@ -1609,7 +1609,10 @@ func TestPlaylistArt(t *testing.T) {
 	if b, _ := os.ReadFile(mine); string(b) != "user" {
 		t.Fatal("user's picture changed")
 	}
-	if a := m.PlaylistArt["Mix"]; a.File != mix || a.ID != "pl-1" || a.Sum == "" || len(m.PlaylistArt) != 1 {
+	if a := m.PlaylistArt["Mix"]; a.File != mix || a.ID != "pl-1" || a.Sum == "" {
+		t.Fatalf("%+v", m.PlaylistArt)
+	}
+	if a := m.PlaylistArt["Mine"]; a != (library.Art{ID: "pl-2"}) { // seen, so the plan settles; no file claimed
 		t.Fatalf("%+v", m.PlaylistArt)
 	}
 	old := time.Unix(1_700_000_000, 0)
@@ -1627,7 +1630,8 @@ func TestPlaylistArt(t *testing.T) {
 		t.Fatal("old picture left", m.PlaylistArt)
 	}
 	m = run(plan.Plan{Playlists: map[string][]string{"Mine": nil}})
-	if _, err := os.Stat(png); !os.IsNotExist(err) || len(m.PlaylistArt) != 0 {
+	_, err := os.Stat(png)
+	if _, ok := m.PlaylistArt["Mix"]; ok || !os.IsNotExist(err) {
 		t.Fatal("picture left with its playlist gone", m.PlaylistArt)
 	}
 	if b, _ := os.ReadFile(mine); string(b) != "user" {
@@ -1646,7 +1650,54 @@ func TestPlaylistArtWriteFailureGoesOn(t *testing.T) {
 	if s := wait(t, r); s.State != "done" {
 		t.Fatalf("%+v", s)
 	}
-	if m := manifest(t, root); len(m.PlaylistArt) != 0 || m.Playlists["Mix"] == "" {
+	if m := manifest(t, root); m.PlaylistArt["Mix"] != (library.Art{ID: "pl-1"}) || m.Playlists["Mix"] == "" {
 		t.Fatalf("%+v %+v", m.PlaylistArt, m.Playlists)
+	}
+}
+
+// A user's picture in the other format also keeps the app's out (Q2 Pod shows .jpg before .png),
+// and the plan made from what the sync recorded counts nothing for that playlist again.
+func TestPlaylistArtUserOtherFormat(t *testing.T) {
+	_, r, root := setup(t)
+	put(t, root+"/_explaylist_data/Mix.png", "user")
+	p := plan.Plan{Playlists: map[string][]string{"Mix": nil}, PlaylistArt: map[string]string{"Mix": "pl-1"}}
+	if err := r.Start(p); err != nil {
+		t.Fatal(err)
+	}
+	if s := wait(t, r); s.State != "done" {
+		t.Fatalf("%+v", s)
+	}
+	if _, err := os.Stat(root + "/_explaylist_data/Mix.jpg"); !os.IsNotExist(err) {
+		t.Fatal("app's .jpg hides the user's .png")
+	}
+	next := plan.Plan{Playlists: map[string][]string{"Mix": nil}}
+	if next.Art(map[string]string{"Mix": "pl-1"}, manifest(t, root)); next.PlaylistsChanged != 0 {
+		t.Fatal("a sync is offered again for nothing")
+	}
+}
+
+// A deselected playlist whose picture can't be removed keeps its .m3u and records, so the next
+// sync tries both again instead of leaving the picture behind unrecorded.
+func TestPlaylistArtRemoveFailureKeepsRecords(t *testing.T) {
+	_, r, root := setup(t)
+	m3u, pic := root+"/_explaylist_data/Mix.m3u", root+"/_explaylist_data/Mix.jpg"
+	put(t, m3u, "#EXTM3U\n")
+	os.MkdirAll(pic+"/x", 0o755) // a directory that isn't empty can't be removed
+	m := &library.Manifest{Playlists: map[string]string{"Mix": m3u},
+		PlaylistArt: map[string]library.Art{"Mix": {File: pic, ID: "pl-1", Sum: "s"}}}
+	if err := m.Save(root, root+"/.subsonic/manifest.json"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Start(plan.Plan{Playlists: map[string][]string{}}); err != nil {
+		t.Fatal(err)
+	}
+	if s := wait(t, r); s.State != "done" {
+		t.Fatalf("%+v", s)
+	}
+	if got := manifest(t, root); got.Playlists["Mix"] != m3u || got.PlaylistArt["Mix"].File != pic {
+		t.Fatalf("%+v %+v", got.Playlists, got.PlaylistArt)
+	}
+	if _, err := os.Stat(m3u); err != nil {
+		t.Fatal(".m3u removed though its picture stayed")
 	}
 }

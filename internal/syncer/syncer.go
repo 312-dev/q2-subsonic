@@ -732,7 +732,10 @@ func (j *job) playlists() error {
 	if !j.failed {
 		for name, f := range m.Playlists {
 			if _, ok := p.Playlists[name]; !ok {
-				if a, ok := m.PlaylistArt[name]; ok && m.Remove(j.root, a.File) == nil {
+				if a, ok := m.PlaylistArt[name]; ok {
+					if a.File != "" && m.Remove(j.root, a.File) != nil {
+						continue // the .m3u stays too, so the next sync tries both again
+					}
 					delete(m.PlaylistArt, name)
 				}
 				if m.Remove(j.root, f) == nil {
@@ -1196,13 +1199,22 @@ const maxCover = 16 << 20
 // art puts playlist name's picture beside its .m3u, named as it, for Q2 Pod's playlist art: the
 // server's own picture for the playlist, or the one it makes from album covers. It is fetched at
 // every sync, as the server can change a picture without a new cover id, and written only when
-// its bytes changed. A picture of the user's with that name is left alone. A failure to fetch is
-// logged and the sync goes on; only a card error stops it.
+// its bytes changed. A picture of the user's with that name, .jpg or .png, is left alone. A
+// failure is logged and the sync goes on; only the card going stops it. Whatever happens, the
+// cover id is recorded, so the plan counts the playlist again only when its cover changes.
 func (j *job) art(name string) error {
 	m, id := j.m, j.p.PlaylistArt[name]
 	if id == "" {
 		return nil
 	}
+	old, had := m.PlaylistArt[name]
+	settle := func(a library.Art) {
+		if !had || a != old {
+			m.PlaylistArt[name] = a
+			j.unsaved++
+		}
+	}
+	keep := library.Art{File: old.File, ID: id, Sum: old.Sum} // what is on the card stays, tried again next sync
 	b, err := func() ([]byte, error) {
 		if err := j.Net.Acquire(j.ctx, false); err != nil {
 			return nil, err
@@ -1222,6 +1234,7 @@ func (j *job) art(name string) error {
 	if err != nil {
 		if j.ctx.Err() == nil {
 			j.logf("sync: playlist art for %s: %v", name, err)
+			settle(keep)
 		}
 		return nil
 	}
@@ -1232,24 +1245,37 @@ func (j *job) art(name string) error {
 	f := library.ArtFile(m.Playlists[name], ext)
 	h := sha256.Sum256(b)
 	sum := hex.EncodeToString(h[:8])
-	old, had := m.PlaylistArt[name]
-	if _, err := os.Lstat(f); err == nil {
-		if !had || old.File != f {
-			j.logf("sync: playlist art: %s is not the app's, left alone", f)
-			return nil
+	// dropOld removes the app's picture under another name or format; false when it couldn't.
+	dropOld := func() bool {
+		if !had || old.File == "" || old.File == f {
+			return true
 		}
-		if old.Sum == sum {
-			if old.ID != id {
-				m.PlaylistArt[name] = library.Art{File: f, ID: id, Sum: sum}
-				j.unsaved++
+		if err := m.Remove(j.root, old.File); err != nil {
+			j.logf("sync: playlist art: remove %s: %v", old.File, err)
+			settle(keep) // still recorded, so the next sync tries again instead of taking it for the user's
+			return false
+		}
+		return true
+	}
+	for _, e := range []string{".jpg", ".png"} { // Q2 Pod shows .jpg before .png: either of the user's wins
+		g := library.ArtFile(m.Playlists[name], e)
+		if had && g == old.File {
+			continue
+		}
+		if _, err := os.Lstat(g); err == nil {
+			j.logf("sync: playlist art: %s is not the app's, left alone", g)
+			if dropOld() {
+				settle(library.Art{ID: id})
 			}
 			return nil
 		}
 	}
-	if had && old.File != f { // its playlist file or its format changed: the old picture goes first
-		if err := m.Remove(j.root, old.File); err != nil {
-			j.logf("sync: playlist art: remove %s: %v", old.File, err)
-		}
+	if _, err := os.Lstat(f); err == nil && had && old.File == f && old.Sum == sum {
+		settle(library.Art{File: f, ID: id, Sum: sum})
+		return nil
+	}
+	if !dropOld() {
+		return nil
 	}
 	// Recorded before it is written, as the .m3u files are, so the guard lets it through and a
 	// stop part-way never leaves a written picture the next sync takes for the user's.
@@ -1265,9 +1291,9 @@ func (j *job) art(name string) error {
 		}
 		j.logf("sync: playlist art: write %s: %v", f, err)
 		if had && old.File == f { // the write is atomic: the old picture is still there
-			m.PlaylistArt[name] = old
+			m.PlaylistArt[name] = keep
 		} else {
-			delete(m.PlaylistArt, name)
+			m.PlaylistArt[name] = library.Art{ID: id}
 		}
 		j.unsaved++
 		return nil
