@@ -1,0 +1,382 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/andsuor/q2-subsonic/internal/catalogue"
+	"github.com/andsuor/q2-subsonic/internal/creds"
+	"github.com/andsuor/q2-subsonic/internal/fakesonic"
+	"github.com/andsuor/q2-subsonic/internal/fw"
+	"github.com/andsuor/q2-subsonic/internal/subsonic"
+)
+
+type catRig struct {
+	*daemon
+	f   *fakesonic.Server
+	tmp string
+}
+
+// newCatRig is a daemon signed in to a fakesonic server with the firmware's words caps and Show
+// in Library on.
+func newCatRig(t *testing.T, caps string, songs []fakesonic.Song) *catRig {
+	t.Helper()
+	card, tmp := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(tmp, "q2-addon.caps"), []byte(caps+"\n"), 0o644)
+	f := fakesonic.New()
+	f.Songs, f.Count, f.LastScan = songs, int64(len(songs)), "2026-11-14T01:00:00Z"
+	d := newDaemon(filepath.Join(card, ".subsonic"), card, tmp)
+	d.newClient = func(c subsonic.Creds) (*subsonic.Client, error) { return subsonic.New(c, f.Client()) }
+	d.runner.CardMounted = func() bool { return true }
+	d.free = func(string) int64 { return 1 << 40 }
+	if err := creds.Save(d.dir, subsonic.Creds{Server: f.URL, User: "u", Password: "pw"}); err != nil {
+		t.Fatal(err)
+	}
+	d.saveSettings(settings{Library: true})
+	d.slInit()
+	t.Cleanup(func() {
+		d.stream.stop()
+		d.runner.Cancel()
+		f.CloseClientConnections()
+		f.Close()
+		d.bg.Wait()
+	})
+	return &catRig{d, f, tmp}
+}
+
+// check runs one Server Library check now and waits for it.
+func (r *catRig) check(t *testing.T) {
+	t.Helper()
+	r.sl.mu.Lock()
+	r.sl.nextPing = time.Time{}
+	r.sl.mu.Unlock()
+	r.slTick()
+	r.bg.Wait()
+}
+
+func (r *catRig) file(name string) string { return filepath.Join(r.dir, name) }
+
+func (r *catRig) state() string {
+	b, _ := os.ReadFile(filepath.Join(r.tmp, "q2-subsonic.state"))
+	return string(b)
+}
+
+func (r *catRig) calls(op string) int {
+	r.f.Mu.Lock()
+	defer r.f.Mu.Unlock()
+	return r.f.Calls[op]
+}
+
+func catLines(t *testing.T, p string) []string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+}
+
+// Firmware without the word gets nothing new: no catalogue, no server key, no request, no row.
+func TestServerLibraryNeedsTheWord(t *testing.T) {
+	r := newCatRig(t, "playlist sections", fakesonic.Library(3))
+	r.check(t)
+	if _, err := os.Stat(r.file(catalogue.CatName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("catalogue written")
+	}
+	if strings.Contains(r.state(), "server=") || len(r.f.Calls) != 0 {
+		t.Fatalf("state %q, calls %v", r.state(), r.f.Calls)
+	}
+	if _, ok := find(r.settingsOp("settings"), "Show in Library"); ok {
+		t.Fatal("Show in Library offered")
+	}
+}
+
+// The first connection is the first copy: every song paged, the playlists, the catalogue written,
+// the server's hearts to ratings.in, and server=up.
+func TestFirstCopy(t *testing.T) {
+	lib := fakesonic.Library(1203)
+	lib[0].Rating = 4
+	r := newCatRig(t, "playlist catalogue ratings", lib)
+	r.f.Playlists = []fakesonic.Playlist{{ID: "p1", Name: "Mix", Changed: "t1", SIDs: []string{"s1", "s2"}}}
+	r.check(t)
+	l := catLines(t, r.file(catalogue.CatName))
+	if want := fmt.Sprintf("#Q2CAT/1\tseq=1\taccount=%s\trows=1206", r.acct()); l[0] != want || len(l) != 1207 {
+		t.Fatalf("%q, %d lines", l[0], len(l))
+	}
+	if r.calls("search3") != 3 || !strings.Contains(r.state(), "server=up\n") {
+		t.Fatalf("calls %v, state %q", r.f.Calls, r.state())
+	}
+	in := catLines(t, r.file(catalogue.InName))
+	key := catalogue.ListenKey(catalogue.FileURL(r.card, "subsonic", "al0", "s1", "flac"))
+	if len(in) != 1 || !strings.HasPrefix(in[0], key+"\ts1\t4\t") {
+		t.Fatal(in)
+	}
+	if sub := r.settingsOp("settings"); !slices.Contains(titles(sub), "Resync Library") {
+		t.Fatal(titles(sub))
+	}
+}
+
+// Later connections ask for the hint, the playlists and the stars, and walk only when the hint
+// moved and the Q2 is idle or charging; a song gone from the server is marked, not removed.
+func TestLaterConnections(t *testing.T) {
+	r := newCatRig(t, "playlist catalogue ratings", fakesonic.Library(10))
+	r.check(t)
+	r.sl.mu.Lock()
+	r.sl.up = -1 // the server was lost meanwhile
+	r.sl.mu.Unlock()
+	r.check(t)
+	if r.calls("search3") != 1 || r.calls("getPlaylists") != 2 || r.calls("getStarred2") != 1 {
+		t.Fatalf("an unchanged server walked again: %v", r.f.Calls)
+	}
+	r.f.Mu.Lock()
+	r.f.Songs = slices.Delete(r.f.Songs, 2, 3)
+	r.f.Count, r.f.LastScan = 9, "2026-11-14T02:00:00Z"
+	r.f.Songs[0].Starred = "2026-11-14T03:00:00Z"
+	r.f.Mu.Unlock()
+	batteryStatus = filepath.Join(r.tmp, "battery")
+	t.Cleanup(func() { batteryStatus = "/sys/class/power_supply/battery/status" })
+	os.WriteFile(batteryStatus, []byte("Charging\n"), 0o644)
+	r.sl.mu.Lock()
+	r.sl.up = -1
+	r.sl.mu.Unlock()
+	r.check(t)
+	if r.calls("search3") != 2 {
+		t.Fatalf("a changed hint while charging didn't walk: %v", r.f.Calls)
+	}
+	l := catLines(t, r.file(catalogue.CatName))
+	if l[0] != fmt.Sprintf("#Q2CAT/1\tseq=2\taccount=%s\trows=9", r.acct()) {
+		t.Fatal(l[0])
+	}
+	var gone catalogue.Song
+	r.store().Each(r.acct(), func(s catalogue.Song) error {
+		if s.ID == "s3" {
+			gone = s
+		}
+		return nil
+	})
+	if !gone.Gone {
+		t.Fatalf("s3: %+v", gone)
+	}
+	if in := catLines(t, r.file(catalogue.InName)); !strings.HasPrefix(in[len(in)-1], catalogue.ListenKey(catalogue.FileURL(r.card, "subsonic", "al0", "s1", "flac"))+"\ts1\t5\t") {
+		t.Fatal(in)
+	}
+}
+
+// A changed hint waits while the Q2 is busy and not charging; Resync Library walks at once.
+func TestWalkWaitsForIdle(t *testing.T) {
+	r := newCatRig(t, "playlist catalogue", fakesonic.Library(4))
+	r.check(t)
+	batteryStatus = filepath.Join(r.tmp, "battery")
+	t.Cleanup(func() { batteryStatus = "/sys/class/power_supply/battery/status" })
+	os.WriteFile(batteryStatus, []byte("Discharging\n"), 0o644)
+	r.f.Mu.Lock()
+	r.f.LastScan = "2026-11-14T05:00:00Z"
+	r.f.Mu.Unlock()
+	r.stream.start(songs(3, "flac"), 0) // a list plays: not idle
+	r.sl.mu.Lock()
+	r.sl.up = -1
+	r.sl.mu.Unlock()
+	r.check(t)
+	r.check(t)
+	if r.calls("search3") != 1 || !r.sl.due {
+		t.Fatalf("walked while busy: %v", r.f.Calls)
+	}
+	r.slResync()
+	r.check(t)
+	if r.calls("search3") != 2 || r.sl.due {
+		t.Fatalf("Resync Library didn't walk: %v", r.f.Calls)
+	}
+}
+
+// Only a lost connection is server=down; a refused sign-in is shown, and the server stays up.
+func TestServerUpDown(t *testing.T) {
+	r := newCatRig(t, "playlist catalogue", fakesonic.Library(2))
+	r.check(t)
+	r.f.Mu.Lock()
+	r.f.Down = true
+	r.f.Mu.Unlock()
+	r.check(t)
+	if !strings.Contains(r.state(), "server=down\n") {
+		t.Fatal(r.state())
+	}
+	if row, _ := find(r.settingsOp("settings"), "Resync Library"); row.Subtitle != "Server not answering" {
+		t.Fatal(row.Subtitle)
+	}
+	r.f.Mu.Lock()
+	r.f.Down, r.f.Pwd = false, "changed"
+	r.f.Mu.Unlock()
+	r.check(t)
+	if !strings.Contains(r.state(), "server=up\n") {
+		t.Fatal(r.state())
+	}
+	if row, _ := find(r.settingsOp("settings"), "Resync Library"); row.Subtitle != "Wrong username or password" {
+		t.Fatal(row.Subtitle)
+	}
+	r.f.Mu.Lock()
+	r.f.Down = true
+	r.f.Mu.Unlock()
+	r.slPinged(r.client().Ping(context.Background()))
+	if !strings.Contains(r.state(), "server=down\n") {
+		t.Fatal("a playback ping's lost server", r.state())
+	}
+}
+
+// ratings.out goes to the server at the connection, before anything is read back, and is gone
+// once sent; the walk then sends nothing back for it.
+func TestRatingsOut(t *testing.T) {
+	r := newCatRig(t, "playlist catalogue ratings", fakesonic.Library(3))
+	r.check(t)
+	synced := filepath.Join(r.card, "Subsonic", "A", "01 - x.flac")
+	r.man = nil
+	os.MkdirAll(filepath.Dir(synced), 0o755)
+	os.WriteFile(r.file("manifest.json"), []byte(`{"Songs":{"s3":{"ID":"s3","Path":"`+synced+`"}}}`), 0o644)
+	out := fmt.Sprintf("k\ts1\t5\t%d\n%s\t\t2\t%d\n", time.Now().Unix(), catalogue.ListenKey(synced), time.Now().Unix())
+	os.WriteFile(r.file(catalogue.OutName), []byte(out), 0o644)
+	os.Remove(r.file(catalogue.InName))
+	r.sl.mu.Lock()
+	r.sl.up = -1
+	r.sl.mu.Unlock()
+	r.check(t)
+	if want := []string{"setRating s1 5", "star s1", "setRating s3 2"}; !slices.Equal(r.f.Writes, want) {
+		t.Fatal(r.f.Writes)
+	}
+	for _, n := range []string{catalogue.OutName, catalogue.OutName + ".sending", catalogue.InName} {
+		if _, err := os.Stat(r.file(n)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s is there", n)
+		}
+	}
+	r.slResync()
+	r.check(t)
+	if _, err := os.Stat(r.file(catalogue.InName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the walk sent the Q2's own hearts back: %q", catLines(t, r.file(catalogue.InName)))
+	}
+	// A lost server keeps them for the next connection.
+	os.WriteFile(r.file(catalogue.OutName), []byte(fmt.Sprintf("k\ts2\t1\t%d\n", time.Now().Unix())), 0o644)
+	r.f.Mu.Lock()
+	r.f.Down = true
+	r.f.Mu.Unlock()
+	r.slConnect(r.client())
+	if l := catLines(t, r.file(catalogue.OutName+".sending")); len(l) != 1 || !strings.HasPrefix(l[0], "k\ts2\t1\t") {
+		t.Fatal(l)
+	}
+}
+
+// .catplay is answered with the usual .play: its seq, and a queue of the server rows (streamed)
+// and the card files as they are.
+func TestCatplay(t *testing.T) {
+	r := newCatRig(t, "playlist catalogue", fakesonic.Library(3))
+	r.check(t)
+	own := filepath.Join(r.card, "Music", "mine.flac")
+	os.MkdirAll(filepath.Dir(own), 0o755)
+	os.WriteFile(own, []byte("x"), 0o644)
+	row := func(sid string) string { return catalogue.FileURL(r.card, "subsonic", "al0", sid, "flac") }
+	req := strings.Join([]string{"42 1", row("s1"), own, row("s2"), row("s404")}, "\n") + "\n"
+	os.WriteFile(r.catplayPath(), []byte(req), 0o644)
+	r.slTick()
+	r.bg.Wait()
+	var play string
+	eventually(t, ".play", func() bool {
+		b, _ := os.ReadFile(filepath.Join(r.tmp, "q2-subsonic.play"))
+		play = string(b)
+		return play != ""
+	})
+	seq, m3u, _ := strings.Cut(play, " ")
+	if seq != "42" {
+		t.Fatal(play)
+	}
+	l := slices.DeleteFunc(catLines(t, m3u), func(s string) bool { return strings.HasPrefix(s, "#") })
+	if len(l) != 2 || l[0] != own || !strings.Contains(l[1], "[s2].flac") {
+		t.Fatalf("queue from the pressed row: %q", l)
+	}
+	r.stream.stop()
+	os.Remove(filepath.Join(r.tmp, "q2-subsonic.play"))
+	r.slTick() // the same request is answered once
+	r.bg.Wait()
+	if _, err := os.Stat(filepath.Join(r.tmp, "q2-subsonic.play")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("answered twice")
+	}
+}
+
+// Show in Library off takes away what the firmware reads; Sign Out the app's records too.
+func TestShowInLibraryOffAndSignOut(t *testing.T) {
+	r := newCatRig(t, "playlist catalogue", fakesonic.Library(2))
+	r.check(t)
+	if m := r.settingsOp("showlib").Message; m != "Show in Library: Off" {
+		t.Fatal(m)
+	}
+	if _, err := os.Stat(r.file(catalogue.CatName)); !errors.Is(err, os.ErrNotExist) || strings.Contains(r.state(), "server=") {
+		t.Fatal("left on", r.state())
+	}
+	if _, err := os.Stat(r.file(catalogue.SongsName)); err != nil {
+		t.Fatal("the app's records went", err)
+	}
+	r.settingsOp("showlib")
+	r.check(t)
+	if _, err := os.Stat(r.file(catalogue.CatName)); err != nil {
+		t.Fatal("not written again", err)
+	}
+	r.signOut()
+	r.bg.Wait()
+	for _, n := range []string{catalogue.CatName, catalogue.SongsName, catalogue.PlaylistsName} {
+		if _, err := os.Stat(r.file(n)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s kept after Sign Out", n)
+		}
+	}
+}
+
+// catalogue.avail follows the stream cache: a song kept, a song evicted.
+func TestAvailFollowsCache(t *testing.T) {
+	r := newCatRig(t, "playlist catalogue", fakesonic.Library(2))
+	r.check(t)
+	p := r.stream.cachePath(r.stream.cacheBase(), subsonic.Song{ID: "s1", Title: "T"}, "flac", "original")
+	os.MkdirAll(filepath.Dir(p), 0o755)
+	os.WriteFile(p, []byte("x"), 0o644)
+	r.slAvail(p, true)
+	r.stream.clearCache()
+	if l := catLines(t, r.file(catalogue.AvailName)); !slices.Equal(l, []string{"s1\t" + p, "-s1"}) {
+		t.Fatal(l)
+	}
+}
+
+// A catalogue queue drops the songs not on the card when the server is lost, so the firmware
+// plays on past them; the card's files and the cache's copies stay.
+func TestCatQueueDropsUncachedWhenLost(t *testing.T) {
+	e := newEnv(t, fw.Caps{Playlist: true})
+	e.s.backoff = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	var pinged atomic.Int32
+	e.s.pinged = func(error) { pinged.Add(1) }
+	lost := &subsonic.APIError{Op: "stream", Msg: "connection refused"}
+	e.src.err = errFor(lost, "s1")
+	e.src.ping = func() error { return lost }
+	own := filepath.Join(e.root, "Music", "own.flac")
+	cached := filepath.Join(e.root, ".subsonic", "stream", "a", "original", "0", "t3 [s3].flac")
+	for _, p := range []string{own, cached} {
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte("x"), 0o644)
+	}
+	sg := songs(5, "flac")
+	e.s.startCat(sg, []string{"", "", own, "", ""}, 0, &catPlay{seq: 77, local: map[string]string{"s3": cached}})
+	until(t, "the queue dropped what isn't on the card", func() bool {
+		_, body := e.queue(t)
+		return !strings.Contains(body, "[s1]")
+	})
+	_, body := e.queue(t)
+	want := strings.Join([]string{e.stream(0, "flac"), own, cached}, "\n")
+	if !strings.Contains(body, want) || strings.Contains(body, "[s4]") {
+		t.Fatalf("queue %q", body)
+	}
+	if b, _ := os.ReadFile(e.play); !strings.HasPrefix(string(b), "77 ") {
+		t.Fatalf(".play %q", b)
+	}
+	if pinged.Load() == 0 {
+		t.Fatal("the ping wasn't told")
+	}
+}

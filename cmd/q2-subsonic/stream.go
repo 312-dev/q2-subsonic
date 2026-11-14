@@ -69,6 +69,11 @@ type streamer struct {
 	used     atomic.Int64            // bytes kept, as last walked and fetched since; for Settings, and when to walk
 	counted  atomic.Bool             // a walk has set used
 
+	// The Server Library's hooks, both optional: avail is told of each song the cache gains (kept)
+	// or loses, and pinged of each ping that tells a lost server from one bad song, and its answer.
+	avail  func(path string, kept bool)
+	pinged func(err error)
+
 	errMu sync.Mutex
 	err   *streamErr
 
@@ -262,7 +267,24 @@ func streamID(path string) string {
 }
 
 // start replaces whatever streams with songs, playing from index from.
-func (s *streamer) start(songs []subsonic.Song, from int) {
+func (s *streamer) start(songs []subsonic.Song, from int) { s.startRun(songs, nil, from, nil) }
+
+// catPlay is a queue the firmware asked for from its Library (.catplay): seq answers it in .play,
+// and local is the stream cache's copies by song id, of any quality, which play as they are.
+type catPlay struct {
+	seq   int64
+	local map[string]string
+}
+
+// startCat is start for a catalogue queue: paths[i], when not "", is a card file that plays as it
+// is (the user's own, or a synced song) in place of songs[i]. While the server is lost, the songs
+// not on the card are taken out of its queue file (dropUncached), so the firmware plays on past
+// them rather than wait.
+func (s *streamer) startCat(songs []subsonic.Song, paths []string, from int, c *catPlay) {
+	s.startRun(songs, paths, from, c)
+}
+
+func (s *streamer) startRun(songs []subsonic.Song, paths []string, from int, cat *catPlay) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stopLocked()
@@ -276,8 +298,16 @@ func (s *streamer) start(songs []subsonic.Song, from int) {
 	jobs := make([]job, len(songs))
 	base := s.cacheBase()
 	for i, sg := range songs {
+		if i < len(paths) && paths[i] != "" {
+			jobs[i] = job{path: paths[i]}
+			continue
+		}
 		if e := m.Songs[sg.ID]; s.caps.Playlist && s.synced(e) {
 			jobs[i] = job{path: e.Path}
+			continue
+		}
+		if p := cat.copy(sg.ID); p != "" {
+			jobs[i] = job{path: p, cached: true}
 			continue
 		}
 		ext, q := s.format(sg)
@@ -292,7 +322,10 @@ func (s *streamer) start(songs []subsonic.Song, from int) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel, s.done = cancel, make(chan struct{})
 	r := &streamRun{s: s, ctx: ctx, songs: slices.Clone(songs), jobs: jobs, from: from, last: from, seq: seq,
-		stale: stale, staleAt: staleAt, heard: staleAt}
+		stale: stale, staleAt: staleAt, heard: staleAt, playSeq: seq}
+	if cat != nil {
+		r.cat, r.playSeq = true, cat.seq
+	}
 	r.protect(from, len(jobs))
 	if s.caps.Playlist {
 		r.queue = filepath.Join(s.dir(), fmt.Sprintf("queue-%d.m3u", seq))
@@ -324,6 +357,16 @@ type streamRun struct {
 	skips     int       // songs skipped since the last one fetched
 	keptLo    int       // the first job protected, and how many jobs there were then
 	keptN     int
+	cat       bool  // a catalogue queue (startCat)
+	playSeq   int64 // the seq .play names: seq, or the .catplay's it answers
+}
+
+// copy is the stream cache's whole copy of song id, "" when it has none (or c is nil).
+func (c *catPlay) copy(id string) string {
+	if c == nil || c.local[id] == "" || !exists(c.local[id]) {
+		return ""
+	}
+	return c.local[id]
 }
 
 // protect holds the list's kept songs from index lo to hi, the last one playable, in the cache.
@@ -373,7 +416,11 @@ func lost(err error) bool {
 func (r *streamRun) serverLost() bool {
 	ctx, cancel := context.WithTimeout(r.ctx, pingIn)
 	defer cancel()
-	return lost(r.s.src.Ping(ctx))
+	err := r.s.src.Ping(ctx)
+	if r.s.pinged != nil && r.ctx.Err() == nil {
+		r.s.pinged(err)
+	}
+	return lost(err)
 }
 
 // failed counts a failed try of song i and reports whether the run goes on, and whether the song
@@ -399,6 +446,9 @@ func (r *streamRun) failed(i int, err error) (goOn, skipped bool) {
 	// answers the ping is not lost: the failure is the song's own, for the rules below.
 	if lost(err) && time.Now().Before(r.quietBy) {
 		if r.serverLost() {
+			if r.cat {
+				return r.dropUncached(i, e)
+			}
 			j.away, j.next = true, time.Now().Add(s.backoff[len(s.backoff)-1])
 			s.setErr(e)
 			return true, false
@@ -434,8 +484,35 @@ func (r *streamRun) failed(i int, err error) (goOn, skipped bool) {
 	return r.from < len(r.jobs), true // nothing left to play ends the run
 }
 
+// dropUncached takes every song from i on that is not on the card out of a catalogue queue, the
+// server being lost: the firmware has queued the lines before i and skips nothing itself, so it
+// would wait at the first missing one. It reports as failed does; nothing left ends the run.
+func (r *streamRun) dropUncached(i int, e *streamErr) (goOn, skipped bool) {
+	select {
+	case <-r.ctx.Done():
+		return false, false
+	case <-time.After(r.s.gap - time.Since(r.wrote)):
+	}
+	n := len(r.jobs)
+	for k := len(r.jobs) - 1; k >= i; k-- {
+		if r.jobs[k].fetch && !exists(r.jobs[k].path) {
+			r.jobs, r.songs = slices.Delete(r.jobs, k, k+1), slices.Delete(r.songs, k, k+1)
+		}
+	}
+	if err := r.writeQueue(); err != nil {
+		r.s.logf("stream: queue: %v", err)
+		r.s.setErr(e)
+		return false, false
+	}
+	r.s.logf("stream: server lost, %d songs not on the card taken out of the queue", n-len(r.jobs))
+	e.skipped = true
+	r.s.setErr(e)
+	r.last = min(r.last, len(r.jobs)-1)
+	return r.from < len(r.jobs), true
+}
+
 func (r *streamRun) announce(path string) {
-	if err := q2.WriteFile(r.s.playFile, []byte(fmt.Sprintf("%d %s", r.seq, path))); err == nil {
+	if err := q2.WriteFile(r.s.playFile, []byte(fmt.Sprintf("%d %s", r.playSeq, path))); err == nil {
 		r.announced = true
 	}
 }
@@ -484,7 +561,7 @@ func (r *streamRun) run() {
 		// list started again at the path .playing had is a start too. A fetch may have kept this
 		// loop from seeing it for a while, which the file's time tells.
 		if !at.Equal(r.heard) {
-			if r.heard = at; now == r.jobs[cur].path {
+			if r.heard = at; now == r.jobs[cur].path && r.songs[cur].ID != "" { // a card file of a catalogue queue is not the server's
 				r.s.plays.now(r.songs[cur], late)
 				if r.jobs[cur].cached { // played now: the last to be evicted
 					library.Touch(r.s.root, now, r.s.now())
@@ -598,6 +675,9 @@ func (r *streamRun) fetch(sg subsonic.Song, j job) error {
 	} else if j.cached {
 		s.used.Add(n)
 		library.Touch(s.root, j.path, s.now()) // the card's clock may be unset; the app's is the server's
+		if s.avail != nil {
+			s.avail(j.path, true)
+		}
 	}
 	return err
 }

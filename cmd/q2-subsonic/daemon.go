@@ -48,6 +48,7 @@ type settings struct {
 	StreamQuality  string `json:"streamQuality,omitempty"`
 	NoReport       bool   `json:"noReport,omitempty"`
 	StreamCacheMB  int    `json:"streamCacheMB,omitempty"`
+	Library        bool   `json:"library,omitempty"` // Show in Library (catalogue.go)
 }
 
 // cacheSizes are Stream Cache's steps in MB, the firmware's Spotify Cache sizes, and Off.
@@ -94,13 +95,21 @@ func (s settings) stream() string {
 	return s.StreamQuality
 }
 
-// stateKeys is the state file: sign-in's QR keys, hold=1 and version, merged so neither writer
-// drops the other's keys.
+// stateKeys is the state file: sign-in's QR keys, hold=1, version and the Server Library's
+// server=up or down, merged so no writer drops another's keys.
 type stateKeys struct {
-	st   *q2.State
-	mu   sync.Mutex
-	sign map[string]string
-	hold bool
+	st     *q2.State
+	mu     sync.Mutex
+	sign   map[string]string
+	hold   bool
+	server string // "" writes no server key
+}
+
+func (s *stateKeys) setServer(v string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.server = v
+	return s.flush()
 }
 
 func (s *stateKeys) Write(kv map[string]string) error {
@@ -130,6 +139,9 @@ func (s *stateKeys) flush() error {
 	}
 	if s.hold {
 		m["hold"] = "1"
+	}
+	if s.server != "" {
+		m["server"] = s.server
 	}
 	return s.st.Write(m)
 }
@@ -245,6 +257,7 @@ type daemon struct {
 	random             []subsonic.Album // Random Albums as last drawn, until Discover is opened again
 	listed             songList         // the song list shown last
 	clearAt            time.Time        // Clear Cache's first press: a second one soon after clears
+	sl                 serverLib        // the Server Library (catalogue.go)
 
 	bg sync.WaitGroup // the work replies leave running (ping, preview, play, sign-out's stops); tests wait for it
 }
@@ -315,6 +328,8 @@ func newDaemon(dir, card, tmp string) *daemon {
 		keep = acctDir(c.Server, c.User)
 	}
 	d.spawn(func() { d.stream.sweep(keep) })
+	d.stream.avail, d.stream.pinged = d.slAvail, d.slPinged
+	d.slInit()
 	d.art = newArtCache(d, filepath.Join(tmp, "q2-subsonic.art"))
 	d.state.Write(nil)
 	d.migrateErr, d.migrateAt = library.Migrate(card, lg.Printf), time.Now()
@@ -404,6 +419,7 @@ func (d *daemon) signOut() {
 	if err := library.Remove(d.card, filepath.Join(d.card, ".subsonic", "library.json")); err != nil {
 		d.log.Printf("sign out: library cache: %v", err)
 	}
+	d.slSignOut()
 	d.art.clear() // after the client is gone: a fetch that had it stores nothing
 	d.spawn(d.runner.Cancel)
 	d.spawn(func() { // under playMu, so a start already running finishes first and is then stopped
@@ -528,8 +544,9 @@ func (d *daemon) saveSettings(s settings) error {
 	return q2.WriteFile(filepath.Join(d.dir, "settings.json"), b)
 }
 
-// tick keeps the state file's hold=1 while files move (a sync, or a stream fetching) or the phone
-// page is open, and takes the firmware's answer to a library request as soon as it comes.
+// tick keeps the state file's hold=1 while files move (a sync, a stream fetching, a Server Library
+// check) or the phone page is open, takes the firmware's answer to a library request as soon as it
+// comes, and runs the Server Library's part (slTick).
 // A run's end, however it ends (done, paused, stopped), counts as activity: its page stays as long
 // as after a press (I15, review G3 Minor 8).
 func (d *daemon) tick() {
@@ -546,7 +563,8 @@ func (d *daemon) tick() {
 		d.cardWalked = false
 		d.mu.Unlock()
 	}
-	d.state.setHold(busy || d.signin.active() || d.stream.busy())
+	d.state.setHold(busy || d.signin.active() || d.stream.busy() || d.sl.busy.Load())
+	d.slTick()
 	if d.caps.Library {
 		d.mu.Lock()
 		d.libPoll()
@@ -555,13 +573,15 @@ func (d *daemon) tick() {
 }
 
 // idle is whether the app may exit: no request for idleAfter (the end of a sync counts as one), no
-// sync or stream, no song that may still count as played or report on its way, and no library
-// request awaiting its answer, as the firmware works on that only while the app runs (I15).
+// sync, stream or Server Library check, no song that may still count as played or report on its
+// way, and no library request awaiting its answer, as the firmware works on that only while the
+// app runs (I15).
 func (d *daemon) idle(now time.Time) bool {
 	d.mu.Lock()
 	last, lib := d.lastReq, d.lib != nil && !d.lib.done
 	d.mu.Unlock()
-	return now.Sub(last) >= idleAfter && !lib && !d.runner.Busy() && !d.stream.active() && !d.stream.plays.pending()
+	return now.Sub(last) >= idleAfter && !lib && !d.runner.Busy() && !d.stream.active() && !d.stream.plays.pending() &&
+		!d.sl.busy.Load()
 }
 
 // close ends what the app runs before it exits; a sync paused here resumes at the next Sync.

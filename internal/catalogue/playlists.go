@@ -71,7 +71,9 @@ type Lister interface {
 // Refresh is the server's playlists now: each one whose changed date (and name) is the one in old
 // keeps its songs, and only the others are asked for, so a connection costs one request when
 // nothing changed. A playlist without a date is asked for every time. changed reports whether
-// anything differs from old.
+// what the catalogue shows differs from old: a playlist added, removed, moved, renamed or with
+// other songs. A date alone is no change (Navidrome moves a smart playlist's when it is asked for
+// and finds the same songs), but the dates are worth saving (SameDates).
 func Refresh(ctx context.Context, l Lister, old []Playlist) (pls []Playlist, changed bool, err error) {
 	list, err := l.Playlists(ctx)
 	if err != nil {
@@ -97,8 +99,13 @@ func Refresh(ctx context.Context, l Lister, old []Playlist) (pls []Playlist, cha
 		for _, s := range songs {
 			p.SIDs = append(p.SIDs, s.ID)
 		}
-		changed = changed || !had || o.Name != p.Name || o.Changed != p.Changed || !slices.Equal(o.SIDs, p.SIDs)
+		changed = changed || !had || o.Name != p.Name || !slices.Equal(o.SIDs, p.SIDs) || i >= len(old) || old[i].ID != sp.ID
 		pls = append(pls, p)
 	}
 	return pls, changed, nil
+}
+
+// SameDates reports whether a and b are the same playlists with the same changed dates.
+func SameDates(a, b []Playlist) bool {
+	return slices.EqualFunc(a, b, func(x, y Playlist) bool { return x.ID == y.ID && x.Changed == y.Changed })
 }

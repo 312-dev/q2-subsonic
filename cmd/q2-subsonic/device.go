@@ -244,7 +244,7 @@ func (d *daemon) reply(req q2spot.Request) q2spot.Reply {
 		return d.menu(req.Arg(0))
 	case "details":
 		return details(req.Arg(0))
-	case "settings", "defq", "streamq", "report", "cachesz", "cacheclr":
+	case "settings", "defq", "streamq", "report", "cachesz", "cacheclr", "showlib", "resync":
 		return d.settingsOp(req.Op)
 	case "onq2":
 		return d.onQ2(req.Arg(0))
@@ -632,6 +632,10 @@ func (d *daemon) settingsOp(op string) q2spot.Reply {
 			d.stream.plays.clear()
 		}
 		return q2spot.Reply{Message: s.reportName()}
+	case "showlib":
+		return d.slToggle(s)
+	case "resync":
+		return d.slResync()
 	}
 	d.mu.Lock()
 	user := d.user
@@ -652,6 +656,7 @@ func (d *daemon) settingsOp(op string) q2spot.Reply {
 			q2spot.Row{Kind: "action", URI: "cacheclr", Title: "Clear Cache", Subtitle: used})
 	}
 	rows = append(rows, act("report", s.reportName(), ""))
+	rows = append(rows, d.slSettings()...)
 	return q2spot.Reply{Rows: append(rows, list("account", "Account", user, ""),
 		info("Version "+strings.TrimPrefix(version, "q2-v")))}
 }

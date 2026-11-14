@@ -12,6 +12,9 @@ type Caps struct {
 	Library  bool
 	// Words of Q2 Pod 1.5.9 and later. "game" and "audio" are not for this app.
 	Pages, Goto, Sleep, Sections, Art, Window, Sort bool
+	// The Server Library's words: the firmware reads a catalogue and keeps hearts in step with the
+	// server (q2-coda's docs/server-library.md). The app writes neither's files without its word.
+	Catalogue, Ratings bool
 }
 
 // ReadCaps reads the firmware capabilities from path. A missing file gives all false.
@@ -47,6 +50,10 @@ func ReadCaps(path string) Caps {
 			caps.Window = true
 		case "sort":
 			caps.Sort = true
+		case "catalogue":
+			caps.Catalogue = true
+		case "ratings":
+			caps.Ratings = true
 		}
 	}
 	return caps

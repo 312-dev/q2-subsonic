@@ -706,6 +706,9 @@ func (d *daemon) syncDone(p plan.Plan) {
 	if err := library.WriteOwned(d.card, d.syncedPath(), []byte(time.Now().Format(time.RFC3339))); err != nil {
 		d.log.Printf("sync: last synced: %v", err)
 	}
+	if changes(p) {
+		d.slRewrite() // the songs synced are card rows now, not the catalogue's
+	}
 	if !d.caps.Library || !changes(p) {
 		return
 	}

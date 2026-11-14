@@ -155,6 +155,9 @@ func (s *streamer) drop(f cacheFile) bool {
 		return false
 	}
 	s.used.Add(-f.size)
+	if s.avail != nil {
+		s.avail(f.path, false)
+	}
 	return true
 }
 

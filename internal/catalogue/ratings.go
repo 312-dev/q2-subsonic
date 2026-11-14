@@ -193,9 +193,24 @@ func send(ctx context.Context, r Rater, o Out, res *Sent) error {
 
 // WriteIn adds changes to ratings.in, a line a song (<listen_key>\t<sid>\t<hearts>\t<unix time>,
 // the columns of ratings.out), written whole. The firmware applies the file and deletes it; one
-// still there when more come keeps its lines, a song's newer one replacing its older.
+// still there when more come keeps its lines, a song's newer one replacing its older. A song with a
+// change of the Q2's still to send (ratings.out.sending) is left out: the Q2's is the newer.
 func WriteIn(card, dir string, changes []Change, key func(Change) string) error {
-	if len(changes) == 0 {
+	pending, err := readOut(filepath.Join(dir, OutName+".sending"))
+	if err != nil {
+		return err
+	}
+	wait := map[string]bool{}
+	for _, o := range pending {
+		wait[o.SID], wait[o.Key] = true, true
+	}
+	var take []Change
+	for _, c := range changes {
+		if !wait[c.SID] && !wait[key(c)] {
+			take = append(take, c)
+		}
+	}
+	if changes = take; len(changes) == 0 {
 		return nil
 	}
 	p := filepath.Join(dir, InName)

@@ -262,11 +262,18 @@ func TestRefreshPlaylists(t *testing.T) {
 	if !changed || r.f.Calls["getPlaylist"] != 3 || !slices.Equal(pls[1].SIDs, []string{"s3", "s1"}) {
 		t.Fatal(pls, changed, r.f.Calls)
 	}
+	r.f.Mu.Lock()
+	r.f.Playlists[1].Changed = "t3" // a smart playlist asked for again: a new date, the same songs
+	r.f.Mu.Unlock()
+	old := pls
+	if pls, changed, _ = Refresh(ctx, r.cl, pls); changed || SameDates(old, pls) || pls[1].Changed != "t3" {
+		t.Fatal("a date alone", changed, pls)
+	}
 	ps := Playlists{r.card, filepath.Join(r.dir, PlaylistsName)}
 	if err := ps.Save(acct, pls); err != nil {
 		t.Fatal(err)
 	}
-	if back, ok := ps.Load(acct); !ok || len(back) != 2 || back[1].Changed != "t2" || !slices.Equal(back[1].SIDs, pls[1].SIDs) {
+	if back, ok := ps.Load(acct); !ok || len(back) != 2 || back[1].Changed != "t3" || !slices.Equal(back[1].SIDs, pls[1].SIDs) {
 		t.Fatal(back, ok)
 	}
 	if _, ok := ps.Load("ffffffff"); ok {
@@ -370,6 +377,11 @@ func TestWriteIn(t *testing.T) {
 	l := readLines(t, filepath.Join(dir, InName))
 	if !slices.Equal(l, []string{"ks1\ts1\t0\t12", "ks2\ts2\t5\t11"}) {
 		t.Fatal(l)
+	}
+	KeepOut(card, dir, []Out{{"ks3", "", 2, 13}}) // the Q2's own change of s3, not sent yet
+	WriteIn(card, dir, []Change{{SID: "s3", Hearts: 4, At: 14}}, key)
+	if l := readLines(t, filepath.Join(dir, InName)); len(l) != 2 {
+		t.Fatal("a pending change of the Q2's overwritten", l)
 	}
 }
 
