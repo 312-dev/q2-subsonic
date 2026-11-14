@@ -8,7 +8,7 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ### Added
 
-- **Playlist art.** A sync puts each synced playlist's picture from the server beside its playlist on the card, where Q2 Pod shows it in Playlists (Row Art in Classic, and Cover Flow): your own picture when the playlist has one, else the server's mix of its album covers. A changed picture is fetched at the next sync, and a picture you put there yourself under the same name is left alone. Requires a Q2 Pod with playlist art; older Q2 Pod ignores the pictures.
+- **Playlist art.** A sync puts each synced playlist's picture from the server beside its playlist on the card, where Q2 Pod shows it in Playlists (Row Art in Classic, and Cover Flow): your own picture when the playlist has one, else the server's mix of its album covers. A changed picture is fetched at the next sync, and a picture you put there yourself under the same name is left alone. Requires Q2 Pod 1.8.1 or later; older Q2 Pod ignores the pictures.
 
 ## [0.7] - 2026-11-12
 
