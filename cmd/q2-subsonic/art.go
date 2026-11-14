@@ -282,9 +282,12 @@ func (c *artCache) fetch(ctx context.Context, id string) ([]byte, error) {
 // baseline JPEG, the one kind the firmware's decoder, which runs on its UI thread, is given
 // whatever the server sent. The size is read before anything is decoded: a small file can declare
 // thousands of pixels.
-func baseline(b []byte) ([]byte, error) {
+func baseline(b []byte) ([]byte, error) { return baselineMax(b, artMaxPx) }
+
+// baselineMax is baseline for a picture of at most max pixels either way.
+func baselineMax(b []byte, max int) ([]byte, error) {
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(b))
-	if err != nil || cfg.Width < 1 || cfg.Height < 1 || cfg.Width > artMaxPx || cfg.Height > artMaxPx {
+	if err != nil || cfg.Width < 1 || cfg.Height < 1 || cfg.Width > max || cfg.Height > max {
 		return nil, errNoCover
 	}
 	img, _, err := image.Decode(bytes.NewReader(b))

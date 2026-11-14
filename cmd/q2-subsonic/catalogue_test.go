@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"os"
 	"path/filepath"
 	"slices"
@@ -380,3 +383,56 @@ func TestCatQueueDropsUncachedWhenLost(t *testing.T) {
 		t.Fatal("the ping wasn't told")
 	}
 }
+
+func testJPEG(t *testing.T, px int) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	if err := jpeg.Encode(&b, image.NewRGBA(image.Rect(0, 0, px, px)), nil); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+// Once the catalogue is written, the checks after it fetch its albums' covers into covers/, a
+// baseline JPEG each, named by album id; an album the server has none for, or one too large to
+// show, is noted and never asked for again.
+func TestCatalogueCovers(t *testing.T) {
+	r := newCatRig(t, "catalogue", fakesonic.Library(30)) // ten albums, al0 to al9
+	r.f.Mu.Lock()
+	r.f.Covers = map[string][]byte{}
+	for i := range 8 {
+		r.f.Covers[fmt.Sprintf("al%d", i)] = testJPEG(t, 160)
+	}
+	r.f.Covers["al9"] = testJPEG(t, 400) // past CoverPx: not one the firmware is given
+	r.f.Mu.Unlock()                      // al8: none on the server
+	r.check(t)                           // the first copy and the catalogue
+	if n := r.calls("getCoverArt"); n != 0 {
+		t.Fatal("covers before the catalogue's first check is over:", n)
+	}
+	r.check(t)
+	dir := r.file(catalogue.CoversName)
+	for i := range 10 {
+		_, err := os.Stat(filepath.Join(dir, fmt.Sprintf("al%d.jpg", i)))
+		if (err == nil) != (i < 8) {
+			t.Fatalf("al%d: %v", i, err)
+		}
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "al0.jpg"))
+	if cfg, err := jpeg.DecodeConfig(bytes.NewReader(b)); err != nil || cfg.Width != 160 || !bytes.HasPrefix(b, jfif) {
+		t.Fatal(cfg, err)
+	}
+	if got := catLines(t, filepath.Join(dir, ".none")); !slices.Equal(sorted(got), []string{"al8", "al9"}) {
+		t.Fatal(got)
+	}
+	r.check(t)
+	if n := r.calls("getCoverArt"); n != 10 {
+		t.Fatal("getCoverArt calls:", n)
+	}
+	// Show in Library off: the covers go with the catalogue
+	r.slToggle(r.settings())
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
+func sorted(s []string) []string { slices.Sort(s); return s }

@@ -33,7 +33,7 @@ In the order data flows:
 | `internal/syncer` | Runs a sync: `.part` files renamed when done, resume, deletes last |
 | `internal/library` | Card layout `Subsonic/…`, the manifest, `.m3u` files and the ownership guard: every card write or delete goes through it |
 | `internal/fw` | The firmware's capabilities and the library update request |
-| `internal/catalogue` | The Server Library's files: the walk of every song, `catalogue.tsv`, `catalogue.avail`, `ratings.out` and `ratings.in` (Q2 Pod's `docs/server-library.md`) |
+| `internal/catalogue` | The Server Library's files: the walk of every song, `catalogue.tsv`, `catalogue.avail`, `ratings.out`, `ratings.in` and the albums' `covers/` (Q2 Pod's `docs/server-library.md`) |
 | `internal/fakesonic` | An OpenSubsonic server for tests |
 | `cmd/q2-subsonic` | The daemon: Q2 screens (`device*.go`), phone sign-in, streaming |
 | `contrib/shanlingq2` | Build, packaging and the card's launcher |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,10 +13,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/andsuor/q2-subsonic/internal/applog"
 	"github.com/andsuor/q2-subsonic/internal/catalogue"
 	"github.com/andsuor/q2-subsonic/internal/library"
 	"github.com/andsuor/q2-subsonic/internal/q2spot"
 	"github.com/andsuor/q2-subsonic/internal/subsonic"
+	"github.com/andsuor/q2-subsonic/internal/syncer"
 )
 
 // The Server Library (q2-coda's docs/server-library.md), the app's half: with the firmware's
@@ -114,7 +117,123 @@ func (d *daemon) slCheck() {
 	d.sl.mu.Unlock()
 	if walk {
 		d.slWalk(cl)
+		return
 	}
+	d.slCovers(cl)
+}
+
+const (
+	slCoverPass = 30 * time.Second // a round of covers at most: the next check, a rewrite, wait no longer
+	slCoverConc = 2                // covers asked for at once
+	slCoverIn   = 10 * time.Second // one cover's request
+)
+
+func (d *daemon) covers() catalogue.Covers {
+	return catalogue.Covers{Card: d.card, Dir: filepath.Join(d.dir, catalogue.CoversName)}
+}
+
+// slCovers is a round of the catalogue's album covers (catalogue.Covers): while the Q2 is idle or
+// charging and the server answers, the albums the folder lacks are asked for, slCoverConc at a
+// time and for slCoverPass at most, through the network slot a sync or a stream takes first. What
+// was saved stays, so the next round, a minute on, goes on from there. A cover the server says it
+// hasn't is noted and not asked again; a lost server ends the round.
+func (d *daemon) slCovers(cl *subsonic.Client) {
+	if !d.slIdle() && !charging() {
+		return
+	}
+	b := catalogue.Build{Card: d.card, App: appID, Account: d.acct(), Synced: d.syncedPaths(), Local: d.stream.copies()}
+	albums, err := catalogue.Albums(d.store(), b)
+	if err != nil {
+		d.slFail("covers", err)
+		return
+	}
+	pass, err := d.covers().Plan(albums)
+	if err != nil || len(pass.Todo) == 0 {
+		if err != nil {
+			d.slFail("covers", err)
+		}
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), slCoverPass)
+	defer cancel()
+	start := time.Now()
+	var mu sync.Mutex
+	var saved, none int
+	var lost error
+	ids := make(chan string)
+	var wg sync.WaitGroup
+	for range slCoverConc {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for id := range ids {
+				jpg, err := d.fetchCover(ctx, cl, id)
+				mu.Lock()
+				var ae *subsonic.APIError
+				switch {
+				case err == nil:
+					if err = pass.Save(id, jpg); err == nil {
+						saved++
+					} else if lost == nil {
+						lost = err // the card is full, or its folder can't be written
+					}
+				case err == errNoCover || errors.As(err, &ae) && (ae.HTTP == 404 || ae.Code == 70):
+					// the server answered that it has none, or sent what the Q2 can't show
+					pass.None(id)
+					none++
+				case ctx.Err() == nil && lost == nil:
+					lost = err
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, id := range pass.Todo {
+		mu.Lock()
+		stop := lost != nil
+		mu.Unlock()
+		if stop || ctx.Err() != nil || !d.slIdle() && !charging() || !d.slActive() {
+			break
+		}
+		select {
+		case ids <- id:
+		case <-ctx.Done():
+		}
+	}
+	close(ids)
+	wg.Wait()
+	d.log.Printf("server library: covers: %d saved, %d without, %d left, %d KiB in %v", saved, none,
+		len(pass.Todo)-saved-none, pass.Used()>>10, time.Since(start).Round(time.Millisecond))
+	if lost != nil && subsonic.ConnectionLost(lost) {
+		d.slServer(lost)
+	} else if lost != nil && !errors.Is(lost, catalogue.ErrCardFull) {
+		d.log.Printf("server library: covers: %s", applog.Redact(lost.Error()))
+	}
+}
+
+// fetchCover is album id's cover from the server, CoverPx a side, as a baseline JPEG.
+func (d *daemon) fetchCover(ctx context.Context, cl *subsonic.Client, id string) ([]byte, error) {
+	if err := syncer.Net.Acquire(ctx, false); err != nil {
+		return nil, err
+	}
+	defer syncer.Net.Release()
+	quiet := *cl
+	quiet.Log = nil // a line per cover would push the walk's history out of log.txt
+	ctx, cancel := context.WithTimeout(ctx, slCoverIn)
+	defer cancel()
+	resp, err := quiet.Get(ctx, quiet.CoverURLSize(id, catalogue.CoverPx), 0)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, catalogue.CoverBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > catalogue.CoverBody {
+		return nil, errNoCover
+	}
+	return baselineMax(b, catalogue.CoverPx)
 }
 
 // slServer records what an answer (or none) says of the server and writes it to the state file:
@@ -569,6 +688,7 @@ func (d *daemon) slToggle(s settings) q2spot.Reply {
 	d.sl.mu.Unlock()
 	if !s.Library {
 		catalogue.Remove(d.card, d.dir)
+		catalogue.RemoveCovers(d.card, d.dir)
 		d.state.setServer("")
 	}
 	return q2spot.Reply{Message: s.libraryName()}
@@ -589,6 +709,7 @@ func (d *daemon) slResync() q2spot.Reply {
 // the server go, as its songs can't play for another account.
 func (d *daemon) slSignOut() {
 	catalogue.Remove(d.card, d.dir)
+	catalogue.RemoveCovers(d.card, d.dir)
 	for _, n := range []string{catalogue.SongsName, catalogue.PlaylistsName, catalogue.OutName + ".sending"} {
 		if err := library.Remove(d.card, filepath.Join(d.dir, n)); err != nil {
 			d.log.Printf("sign out: %s: %v", n, err)

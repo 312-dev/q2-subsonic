@@ -41,7 +41,8 @@ type Server struct {
 	Down      bool  // every connection is closed unanswered
 	NoEmpty   bool  // the empty query finds nothing, as on a server that doesn't take it
 	Calls     map[string]int
-	Writes    []string // "setRating s1 3", "star s1", "unstar s1"
+	Writes    []string          // "setRating s1 3", "star s1", "unstar s1"
+	Covers    map[string][]byte // getCoverArt's picture by id; an id not here is error 70
 }
 
 // New starts a TLS server with user u and password "pw".
@@ -179,6 +180,14 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 			f.Writes = append(f.Writes, op+" "+s.ID)
 		}
 		ok(map[string]any{})
+	case "getCoverArt":
+		b, have := f.Covers[q.Get("id")]
+		if !have {
+			fail(70, "Artwork not found")
+			return
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(b)
 	default:
 		w.WriteHeader(404)
 	}
