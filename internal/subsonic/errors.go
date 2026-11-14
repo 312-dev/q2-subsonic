@@ -47,6 +47,14 @@ func Unsupported(err error) bool {
 	return errors.As(err, &ae) && ae.Code == 0 && (ae.HTTP == 404 || ae.HTTP == 410 || ae.HTTP == 501)
 }
 
+// ConnectionLost reports whether err is the server out of reach: no answer at all (a name that
+// doesn't resolve, a refused or timed-out connection) or an answer that stopped arriving. An answer
+// of any kind, an HTTP error or a refused sign-in included, is a server that is there.
+func ConnectionLost(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && (ae.HTTP == 0 && errors.Is(err, ErrUnreachable) || errors.Is(err, ErrStalled))
+}
+
 // codeKind is the Err value a Subsonic error code unwraps to: 40 and 44 are wrong credentials,
 // 41-43 a sign-in method the server won't take for this user (an LDAP user, say), 70 data not found.
 func codeKind(code int) error {

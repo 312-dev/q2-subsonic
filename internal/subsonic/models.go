@@ -27,6 +27,16 @@ type Playlist struct {
 	ID, Name  string
 	SongCount int
 	CoverArt  string
+	Changed   string // when it last changed, as the server writes it (getPlaylists); "" when it doesn't say
+}
+
+// SongInfo is a song with what the Server Library keeps of it besides: its genre, MusicBrainz
+// recording id, the user's rating (0 to 5) and when they starred it ("" when not starred).
+type SongInfo struct {
+	Song
+	Genre, MBID string
+	Rating      int
+	Starred     string
 }
 
 type Genre struct {
@@ -52,6 +62,10 @@ type wireSong struct {
 	CoverArt           string `json:"coverArt"`
 	BitRate            int    `json:"bitRate"`
 	ArtistID           string `json:"artistId"`
+	Genre              string `json:"genre"`
+	MusicBrainzID      string `json:"musicBrainzId"`
+	UserRating         int    `json:"userRating"`
+	Starred            string `json:"starred"`
 }
 
 func (w wireSong) song() Song {
@@ -61,6 +75,18 @@ func (w wireSong) song() Song {
 	}
 	return Song{w.ID, w.Title, w.Album, w.AlbumID, w.Artist, aa, w.Year, w.Disc, w.Track, w.Duration,
 		w.Size, w.Suffix, w.CoverArt, w.BitRate, ""}
+}
+
+func (w wireSong) info() SongInfo {
+	return SongInfo{Song: w.song(), Genre: w.Genre, MBID: w.MusicBrainzID, Rating: w.UserRating, Starred: w.Starred}
+}
+
+func infos(ws []wireSong) []SongInfo {
+	out := make([]SongInfo, len(ws))
+	for i, w := range ws {
+		out[i] = w.info()
+	}
+	return out
 }
 
 func songs(ws []wireSong) []Song {

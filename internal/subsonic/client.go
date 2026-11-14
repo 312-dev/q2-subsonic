@@ -330,6 +330,7 @@ func (c *Client) Playlists(ctx context.Context) ([]Playlist, error) {
 				Name      string `json:"name"`
 				SongCount int    `json:"songCount"`
 				CoverArt  string `json:"coverArt"`
+				Changed   string `json:"changed"`
 			} `json:"playlist"`
 		} `json:"playlists"`
 	}
@@ -358,7 +359,7 @@ func (c *Client) Playlist(ctx context.Context, id string) (Playlist, []Song, err
 		return Playlist{}, nil, err
 	}
 	p := r.Playlist
-	return Playlist{p.ID, p.Name, p.SongCount, p.CoverArt}, songs(p.Entry), nil
+	return Playlist{ID: p.ID, Name: p.Name, SongCount: p.SongCount, CoverArt: p.CoverArt}, songs(p.Entry), nil
 }
 
 func (c *Client) Albums(ctx context.Context, offset, size int) ([]Album, error) {
@@ -524,6 +525,18 @@ func (c *Client) Search(ctx context.Context, q string, offset int) ([]Artist, []
 // as two quote characters (a bare query= gives nothing on Navidrome before 0.59). A server that
 // doesn't know it answers with no songs, or an error.
 func (c *Client) Songs(ctx context.Context, offset, size int) ([]Song, error) {
+	ws, err := c.songPage(ctx, offset, size)
+	return songs(ws), err
+}
+
+// SongInfos is Songs with each song's genre, MusicBrainz id, rating and star, for the Server
+// Library's walk.
+func (c *Client) SongInfos(ctx context.Context, offset, size int) ([]SongInfo, error) {
+	ws, err := c.songPage(ctx, offset, size)
+	return infos(ws), err
+}
+
+func (c *Client) songPage(ctx context.Context, offset, size int) ([]wireSong, error) {
 	var r struct {
 		R struct {
 			Song []wireSong `json:"song"`
@@ -534,7 +547,62 @@ func (c *Client) Songs(ctx context.Context, offset, size int) ([]Song, error) {
 	if err := c.call(ctx, "search3", v, &r); err != nil {
 		return nil, err
 	}
-	return songs(r.R.Song), nil
+	return r.R.Song, nil
+}
+
+// StarredSongs is the songs the user starred, with when (getStarred2).
+func (c *Client) StarredSongs(ctx context.Context) ([]SongInfo, error) {
+	var r struct {
+		S struct {
+			Song []wireSong `json:"song"`
+		} `json:"starred2"`
+	}
+	if err := c.call(ctx, "getStarred2", nil, &r); err != nil {
+		return nil, err
+	}
+	return infos(r.S.Song), nil
+}
+
+// SongInfo is getSong with the song's rating and star.
+func (c *Client) SongInfo(ctx context.Context, id string) (SongInfo, error) {
+	var r struct {
+		Song wireSong `json:"song"`
+	}
+	if err := c.call(ctx, "getSong", url.Values{"id": {id}}, &r); err != nil {
+		return SongInfo{}, err
+	}
+	return r.Song.info(), nil
+}
+
+// IndexesModified is getIndexes' lastModified, in milliseconds: when the server's folders last
+// changed, for a server whose getScanStatus doesn't say. since is the value last seen (0: none),
+// sent as ifModifiedSince so an unchanged server can leave the indexes out.
+func (c *Client) IndexesModified(ctx context.Context, since int64) (int64, error) {
+	var r struct {
+		I struct {
+			LastModified int64 `json:"lastModified"`
+		} `json:"indexes"`
+	}
+	q := url.Values{}
+	if since > 0 {
+		q.Set("ifModifiedSince", strconv.FormatInt(since, 10))
+	}
+	err := c.call(ctx, "getIndexes", q, &r)
+	return r.I.LastModified, err
+}
+
+// SetRating sets the user's rating of a song, 1 to 5, or 0 to clear it.
+func (c *Client) SetRating(ctx context.Context, id string, rating int) error {
+	return c.call(ctx, "setRating", url.Values{"id": {id}, "rating": {strconv.Itoa(rating)}}, nil)
+}
+
+// Star stars a song for the user; Unstar takes the star away.
+func (c *Client) Star(ctx context.Context, id string) error {
+	return c.call(ctx, "star", url.Values{"id": {id}}, nil)
+}
+
+func (c *Client) Unstar(ctx context.Context, id string) error {
+	return c.call(ctx, "unstar", url.Values{"id": {id}}, nil)
 }
 
 // ScanStatus is getScanStatus: whether the server is scanning, its song count, and when it last
