@@ -9,15 +9,15 @@ import (
 
 const playlistsMagic = "#Q2PLAYLISTS/1"
 
-// Playlist is a server playlist: its songs' ids in order, duplicates included, and when the
-// server says it last changed.
+// Playlist is a server playlist: its songs' ids in order, duplicates included, when the server
+// says it last changed, and its coverArt id (Art, "" for none).
 type Playlist struct {
-	ID, Name, Changed string
-	SIDs              []string
+	ID, Name, Changed, Art string
+	SIDs                   []string
 }
 
 // Playlists is server-playlists.tsv: a "p" line a playlist (id, name, changed), each followed by an
-// "i" line a song (the song's id).
+// "i" line a song (the song's id). A "p" line's fifth field is its coverArt id.
 type Playlists struct {
 	Card, Path string
 }
@@ -34,8 +34,12 @@ func (ps Playlists) Load(account string) (out []Playlist, ok bool) {
 	}, func(l string) error {
 		f := split(l)
 		switch {
-		case len(f) == 4 && f[0] == "p":
-			out = append(out, Playlist{ID: f[1], Name: f[2], Changed: f[3]})
+		case (len(f) == 4 || len(f) == 5) && f[0] == "p": // a file before the cover's field has 4
+			p := Playlist{ID: f[1], Name: f[2], Changed: f[3]}
+			if len(f) == 5 {
+				p.Art = f[4]
+			}
+			out = append(out, p)
 		case len(f) == 2 && f[0] == "i" && len(out) > 0:
 			out[len(out)-1].SIDs = append(out[len(out)-1].SIDs, f[1])
 		}
@@ -54,7 +58,7 @@ func (ps Playlists) Save(account string, pls []Playlist) error {
 	}
 	f.WriteString(header(playlistsMagic, [][2]string{{"account", account}}))
 	for _, p := range pls {
-		f.WriteString(fields("p", p.ID, p.Name, p.Changed))
+		f.WriteString(fields("p", p.ID, p.Name, p.Changed, p.Art))
 		for _, sid := range p.SIDs {
 			f.WriteString(fields("i", sid))
 		}
@@ -87,6 +91,7 @@ func Refresh(ctx context.Context, l Lister, old []Playlist) (pls []Playlist, cha
 	for i, sp := range list {
 		o, had := byID[sp.ID]
 		if had && sp.Changed != "" && o.Changed == sp.Changed && o.Name == sp.Name {
+			o.Art = sp.CoverArt
 			pls = append(pls, o)
 			changed = changed || i >= len(old) || old[i].ID != sp.ID // moved in the list
 			continue
@@ -95,7 +100,7 @@ func Refresh(ctx context.Context, l Lister, old []Playlist) (pls []Playlist, cha
 		if err != nil {
 			return nil, false, err
 		}
-		p := Playlist{ID: sp.ID, Name: sp.Name, Changed: sp.Changed}
+		p := Playlist{ID: sp.ID, Name: sp.Name, Changed: sp.Changed, Art: sp.CoverArt}
 		for _, s := range songs {
 			p.SIDs = append(p.SIDs, s.ID)
 		}
@@ -105,7 +110,8 @@ func Refresh(ctx context.Context, l Lister, old []Playlist) (pls []Playlist, cha
 	return pls, changed, nil
 }
 
-// SameDates reports whether a and b are the same playlists with the same changed dates.
+// SameDates reports whether a and b are the same playlists with the same changed dates (and
+// covers, so a new coverArt id is saved too).
 func SameDates(a, b []Playlist) bool {
-	return slices.EqualFunc(a, b, func(x, y Playlist) bool { return x.ID == y.ID && x.Changed == y.Changed })
+	return slices.EqualFunc(a, b, func(x, y Playlist) bool { return x.ID == y.ID && x.Changed == y.Changed && x.Art == y.Art })
 }

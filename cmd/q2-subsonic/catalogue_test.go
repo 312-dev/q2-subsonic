@@ -506,6 +506,39 @@ func sorted(s []string) []string { slices.Sort(s); return s }
 
 // Covers are fetched while a list plays what it already fetched (the stream is active but moves
 // no data), and wait while a song of the stream is still to fetch.
+// A server playlist's cover is covers/pl-<id>.jpg, asked for by its coverArt id after the albums',
+// and goes with the playlist.
+func TestPlaylistCovers(t *testing.T) {
+	r := newCatRig(t, "catalogue", fakesonic.Library(3))
+	r.f.Mu.Lock()
+	r.f.Playlists = []fakesonic.Playlist{{ID: "p1", Name: "Mix", Changed: "t1", CoverArt: "pl-p1_5", SIDs: []string{"s1"}},
+		{ID: "p2", Name: "Bare", Changed: "t1", SIDs: []string{"s2"}}}
+	r.f.Covers = map[string][]byte{"pl-p1_5": testJPEG(t, 160)}
+	r.f.Mu.Unlock()
+	batteryStatus = filepath.Join(r.tmp, "battery")
+	t.Cleanup(func() { batteryStatus = "/sys/class/power_supply/battery/status" })
+	os.WriteFile(batteryStatus, []byte("Charging\n"), 0o644)
+	r.check(t) // the first copy
+	r.check(t) // the covers' round
+	if _, err := os.Stat(filepath.Join(r.dir, catalogue.CoversName, "pl-p1.jpg")); err != nil {
+		t.Fatal(err, r.f.Calls)
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, catalogue.CoversName, "pl-p2.jpg")); err == nil {
+		t.Fatal("a cover for a playlist without one")
+	}
+	r.f.Mu.Lock()
+	r.f.Playlists = r.f.Playlists[1:]
+	r.f.Mu.Unlock()
+	r.sl.mu.Lock()
+	r.sl.up = -1
+	r.sl.mu.Unlock()
+	r.check(t) // the playlist gone: read again on the connection
+	r.check(t)
+	if _, err := os.Stat(filepath.Join(r.dir, catalogue.CoversName, "pl-p1.jpg")); err == nil {
+		t.Fatal("a gone playlist's cover kept")
+	}
+}
+
 func TestCoversWhileAListPlays(t *testing.T) {
 	r := newCatRig(t, "catalogue", fakesonic.Library(30)) // ten albums
 	r.f.Mu.Lock()

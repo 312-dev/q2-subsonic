@@ -148,6 +148,14 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 		d.slFail("covers", err)
 		return
 	}
+	pls, _ := d.playlistsFile().Load(d.acct()) // the playlists' covers after the albums'
+	albums = append(albums, catalogue.PlaylistCovers(pls)...)
+	art := map[string]string{} // a playlist's file name: the coverArt id the server knows it by
+	for _, a := range albums {
+		if a.Art != "" {
+			art[a.ID] = a.Art
+		}
+	}
 	pass, err := d.covers().Plan(albums)
 	if err != nil || len(pass.Todo) == 0 {
 		if err != nil {
@@ -168,7 +176,11 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 		go func() {
 			defer wg.Done()
 			for id := range ids {
-				jpg, err := d.fetchCover(ctx, cl, id)
+				ask := id
+				if a := art[id]; a != "" {
+					ask = a
+				}
+				jpg, err := d.fetchCover(ctx, cl, ask)
 				mu.Lock()
 				var ae *subsonic.APIError
 				switch {

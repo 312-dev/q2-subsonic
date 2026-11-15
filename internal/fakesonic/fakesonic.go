@@ -25,8 +25,8 @@ type Song struct {
 }
 
 type Playlist struct {
-	ID, Name, Changed string
-	SIDs              []string
+	ID, Name, Changed, CoverArt string
+	SIDs                        []string
 }
 
 // Server is the fake. Lock Mu to change its fields while it serves.
@@ -146,7 +146,11 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 	case "getPlaylists":
 		var out []any
 		for _, p := range f.Playlists {
-			out = append(out, map[string]any{"id": p.ID, "name": p.Name, "songCount": len(p.SIDs), "changed": p.Changed})
+			m := map[string]any{"id": p.ID, "name": p.Name, "songCount": len(p.SIDs), "changed": p.Changed}
+			if p.CoverArt != "" {
+				m["coverArt"] = p.CoverArt
+			}
+			out = append(out, m)
 		}
 		ok(map[string]any{"playlists": map[string]any{"playlist": out}})
 	case "getPlaylist":

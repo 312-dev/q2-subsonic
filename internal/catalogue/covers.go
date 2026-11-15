@@ -37,8 +37,22 @@ const (
 	noneName    = ".none"
 )
 
-// Album is one album of the catalogue.
-type Album struct{ ID, Name string }
+// Album is one album of the catalogue, or a playlist's cover (PlaylistCovers): ID names its file,
+// Art, when not "", is the coverArt id the server is asked for in its place.
+type Album struct{ ID, Name, Art string }
+
+// PlaylistCovers is each playlist with a cover as an Album named pl-<playlist id>, the file the
+// firmware's Playlists rows look for (q2-coda's docs/server-library.md, Covers), asked for by the
+// playlist's coverArt id.
+func PlaylistCovers(pls []Playlist) []Album {
+	var out []Album
+	for _, p := range pls {
+		if id := "pl-" + p.ID; p.Art != "" && coverID(p.ID) {
+			out = append(out, Album{id, p.Name, p.Art})
+		}
+	}
+	return out
+}
 
 // Albums is the albums the catalogue lists s rows of (Write's songs), each once, in the order the
 // Library's Albums list shows them (by name, case folded): the top of the list gets its covers
@@ -51,7 +65,7 @@ func Albums(st Store, b Build) ([]Album, error) {
 			return nil
 		}
 		seen[s.AlbumID] = true
-		out = append(out, Album{s.AlbumID, s.Album})
+		out = append(out, Album{s.AlbumID, s.Album, ""})
 		return nil
 	})
 	sort.SliceStable(out, func(i, j int) bool {
