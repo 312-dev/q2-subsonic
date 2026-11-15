@@ -224,12 +224,19 @@ func (d *daemon) playNow(songs []subsonic.Song, none string) q2spot.Reply {
 }
 
 // shuffle plays random songs: of the whole server (""), of a genre ("genre:<name>"), or an
-// artist's own in random order ("artist:<id>"). The argument is cut at its first colon only: a
-// genre's name may hold spaces and colons.
+// artist's or album's own in random order ("artist:<id>", "album:<id>"). The argument is cut at
+// its first colon only: a genre's name may hold spaces and colons.
 func (d *daemon) shuffle(ctx context.Context, cl *subsonic.Client, arg string) q2spot.Reply {
 	what, name, _ := strings.Cut(arg, ":")
 	if what == string(selection.KindArtist) {
 		return d.playArtist(ctx, cl, name, true)
+	}
+	if what == string(selection.KindAlbum) {
+		it, err := d.item(ctx, cl, selection.KindAlbum, name)
+		if err != nil {
+			return d.errToast(err)
+		}
+		return d.playNow(shuffled(it.songs), "Nothing to play")
 	}
 	if what != "genre" {
 		name = ""

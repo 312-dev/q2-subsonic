@@ -88,6 +88,7 @@ Newer Q2 Pod firmware offers extensions to card apps. Without them everything st
 | `catalogue` | **Show in Library**: the server's songs and playlists in the Q2's Library. | No Show in Library row; the app writes none of its files. |
 | `ratings` | Hearts follow a song between the Q2 and the server. | Hearts stay on the Q2. |
 | `artist` | An artist's page says its albums, singles, songs and genre, and has Singles & EPs, Similar Artists and All Songs; songs show their album and length. | The artist's page has Play, Shuffle, Radio, Top Songs and its releases. |
+| `album` | An album's page has Shuffle beside Play, says its artist, year, song count and running time, and shows each song's length. | The album's page has Play and its songs. |
 
 ## Errors and logs
 

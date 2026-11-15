@@ -321,7 +321,8 @@ func (d *daemon) letters(ars []subsonic.Artist) []q2spot.Row {
 
 // itemData is an album's or playlist's songs, or an artist's albums.
 type itemData struct {
-	name   string // an artist's
+	name   string         // an artist's
+	album  subsonic.Album // an album's own: its artist and year, for its page's header
 	songs  []subsonic.Song
 	albums []subsonic.Album
 }
@@ -335,7 +336,7 @@ func (d *daemon) item(ctx context.Context, cl *subsonic.Client, kind selection.K
 	return cached(d, cl, key, func() (it itemData, err error) {
 		switch kind {
 		case selection.KindAlbum:
-			_, it.songs, err = getAlbum(ctx, cl, id)
+			it.album, it.songs, err = getAlbum(ctx, cl, id)
 		case selection.KindPlaylist:
 			_, it.songs, err = cl.Playlist(ctx, id)
 		case selection.KindArtist:
@@ -361,8 +362,8 @@ func (d *daemon) item(ctx context.Context, cl *subsonic.Client, kind selection.K
 }
 
 // itemPage is an artist's, album's or playlist's own page: Add/Remove, Quality, Play (an artist's:
-// Play, Shuffle, Radio, Top Songs, and with the firmware's "artist" the rows of artistRows), then
-// its contents.
+// Play, Shuffle, Radio, Top Songs, and with the firmware's "artist" the rows of artistRows; an
+// album's with the firmware's "album": Play and the rows of albumRows), then its contents.
 func (d *daemon) itemPage(ctx context.Context, cl *subsonic.Client, arg, cursor string) q2spot.Reply {
 	kind, id := parseKey(arg)
 	key := selection.Key(kind, id)
@@ -387,11 +388,15 @@ func (d *daemon) itemPage(ctx context.Context, cl *subsonic.Client, arg, cursor 
 			rows = append(rows, act("quality", "Quality: "+qualityName(it.Quality), key))
 		}
 	}
+	album := kind == selection.KindAlbum && d.caps.Album
 	if len(songs) > 0 {
 		rows = append(rows, act("play", "Play", key+" 0"))
+		if album {
+			rows = append(rows, albumRows(key, it.album, songs)...)
+		}
 	}
 	for i, s := range songs {
-		rows = append(rows, v.song(s, key, i))
+		rows = append(rows, v.albumSong(s, key, i, album))
 	}
 	if len(albums) > 0 {
 		rows = append(rows, act("play", "Play", key+" 0"), act("shuffle", "Shuffle", key), act("radio", "Radio", key))
