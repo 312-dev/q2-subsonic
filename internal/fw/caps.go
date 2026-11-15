@@ -15,6 +15,9 @@ type Caps struct {
 	// The Server Library's words: the firmware reads a catalogue and keeps hearts in step with the
 	// server (q2-coda's docs/server-library.md). The app writes neither's files without its word.
 	Catalogue, Ratings bool
+	// Settings > Storage (q2-coda's docs/internals.md#storage): the firmware reads storage.tsv and
+	// writes storage.out. The app writes neither without the word.
+	Storage bool
 }
 
 // ReadCaps reads the firmware capabilities from path. A missing file gives all false.
@@ -54,6 +57,8 @@ func ReadCaps(path string) Caps {
 			caps.Catalogue = true
 		case "ratings":
 			caps.Ratings = true
+		case "storage":
+			caps.Storage = true
 		}
 	}
 	return caps

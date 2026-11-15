@@ -4,3 +4,5 @@ qr=0
 goto=1
 catalogue=1
 ratings=1
+storage=1
+downloads=Subsonic

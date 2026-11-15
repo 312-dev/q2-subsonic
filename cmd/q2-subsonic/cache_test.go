@@ -523,13 +523,13 @@ func TestGotoCachedSong(t *testing.T) {
 // The preview counts what the cache can give back, and says when the sync takes it.
 func TestPreviewTakesFromCache(t *testing.T) {
 	p := &plan.Plan{Add: []plan.Want{{Bytes: 3 << 30}}, NeedBytes: 3 << 30, FreeBytes: 4 << 30, Fits: true}
-	got := strings.Join(titles(previewRows(p, 2<<30)), "|")
+	got := strings.Join(titles(previewRows(p, 2<<30, 0, 0)), "|")
 	for _, w := range []string{"Needs 3.2 GB · 2.1 GB free", "Takes 1.1 GB from the Stream Cache", "Start Sync"} {
 		if !strings.Contains(got, w) {
 			t.Errorf("no %q in %q", w, got)
 		}
 	}
-	if got := strings.Join(titles(previewRows(p, 0)), "|"); strings.Contains(got, "Stream Cache") || !strings.Contains(got, "4.3 GB free") {
+	if got := strings.Join(titles(previewRows(p, 0, 0, 0)), "|"); strings.Contains(got, "Stream Cache") || !strings.Contains(got, "4.3 GB free") {
 		t.Errorf("with room: %q", got)
 	}
 

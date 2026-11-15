@@ -94,7 +94,7 @@ func (d *daemon) syncPage(cl *subsonic.Client) q2spot.Reply {
 		d.spawn(func() { defer cancel(); d.computePreview(ctx, cl, p) })
 		return checking("")
 	}
-	done, pl, err, note, reclaim := p.done, p.plan, p.err, p.note, p.reclaim
+	done, pl, err, note, reclaim, over := p.done, p.plan, p.err, p.note, p.reclaim, p.over
 	if done && err != nil {
 		d.preview = nil // shown once; the next Sync tries again
 	}
@@ -105,7 +105,7 @@ func (d *daemon) syncPage(cl *subsonic.Client) q2spot.Reply {
 	case err != nil:
 		return d.errRows(err, "")
 	}
-	return previewRows(pl, reclaim)
+	return previewRows(pl, reclaim, over, d.settings().limitBytes())
 }
 
 // dropPreview forgets the preview, stopping its fetches if it is still at work (M11). d.mu is held.
@@ -243,7 +243,7 @@ func (d *daemon) computePreview(ctx context.Context, cl *subsonic.Client, p *pre
 		err = werr
 	}
 	var pl plan.Plan
-	var reclaim int64
+	var reclaim, over int64
 	if err == nil {
 		d.mu.Lock()
 		p.note = working
@@ -278,6 +278,11 @@ func (d *daemon) computePreview(ctx context.Context, cl *subsonic.Client, p *pre
 			}
 		}
 		pl.Hold(gone)
+		var now int64
+		for _, e := range d.manifest().Songs {
+			now += e.Size
+		}
+		over = overLimit(d.settings().limitBytes(), now, pl.NeedBytes)
 		planning = lap()
 		// The items holding songs already on the card, recorded now: an up-to-date preview starts
 		// no sync, and status reads them after a restart (I12). A running sync records its own.
@@ -289,7 +294,7 @@ func (d *daemon) computePreview(ctx context.Context, cl *subsonic.Client, p *pre
 	d.log.Printf("sync: check: fetch %v, library cache %v, drop-missing %v, plan %v, refresh %v, total %v",
 		fetch, cache, drop, planning, refresh, time.Since(start).Round(time.Millisecond))
 	d.mu.Lock()
-	p.done, p.plan, p.err, p.at, p.reclaim = true, &pl, err, time.Now(), reclaim
+	p.done, p.plan, p.err, p.at, p.reclaim, p.over = true, &pl, err, time.Now(), reclaim, over
 	if err == nil {
 		d.gone = gone
 	}
@@ -302,8 +307,9 @@ func changes(p plan.Plan) bool {
 }
 
 // previewRows is the preview's page. reclaim is the part of the plan's free bytes that the stream
-// cache holds and a sync takes when it needs it.
-func previewRows(p *plan.Plan, reclaim int64) q2spot.Reply {
+// cache holds and a sync takes when it needs it; over, how far the sync would take the downloads
+// past limit (Settings > Storage > Downloads' Limit on Q2 Pod), which offers no Start.
+func previewRows(p *plan.Plan, reclaim, over, limit int64) q2spot.Reply {
 	var rows []q2spot.Row
 	if p.Held > 0 { // its songs stay; On This Q2 marks it, to take out
 		rows = append(rows, q2spot.Row{Kind: "info", Title: plural(p.Held, "item") + " no longer on the server",
@@ -344,7 +350,9 @@ func previewRows(p *plan.Plan, reclaim int64) q2spot.Reply {
 	}
 	free := p.FreeBytes - reclaim
 	rows = append(rows, info("Needs "+size(max(p.NeedBytes, 0))+" · "+size(free)+" free"))
-	if p.Fits {
+	if over > 0 {
+		rows = append(rows, info("Over the "+size(limit)+" Downloads limit · Take out "+size(over)))
+	} else if p.Fits {
 		if take := p.NeedBytes + planMargin - free; p.NeedBytes > 0 && take > 0 {
 			rows = append(rows, info("Takes "+size(take)+" from the Stream Cache"))
 		}
@@ -489,6 +497,9 @@ func (d *daemon) syncAction(op string) q2spot.Reply {
 		}
 		if !p.plan.Fits {
 			return q2spot.Reply{Message: "Not enough space"}
+		}
+		if p.over > 0 {
+			return q2spot.Reply{Message: "Over the Downloads limit"}
 		}
 		d.mu.Lock()
 		d.lib = nil // before Start: the sync's own OnDone sets it
@@ -702,6 +713,7 @@ func there(paths []string) []string {
 func (d *daemon) syncDone(p plan.Plan) {
 	d.mu.Lock()
 	d.lastReq = time.Now() // the summary and Failed Songs stay as long as after a press (I15)
+	d.st.pending = true    // Storage's sizes (storage.go)
 	d.mu.Unlock()
 	if err := library.WriteOwned(d.card, d.syncedPath(), []byte(time.Now().Format(time.RFC3339))); err != nil {
 		d.log.Printf("sync: last synced: %v", err)
