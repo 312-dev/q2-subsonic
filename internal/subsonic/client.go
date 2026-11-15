@@ -500,6 +500,27 @@ func (c *Client) Artist(ctx context.Context, id string) (Artist, []Album, error)
 	return r.Artist.artist(), albums(r.Artist.Album), nil
 }
 
+// SimilarArtists is getArtistInfo2's similar artists, up to count, those on the server only (an
+// entry with no id is left out). Not every server has it (see Unsupported); Navidrome answers
+// from its Last.fm or Spotify agents, and with none set up the list is empty.
+func (c *Client) SimilarArtists(ctx context.Context, id string, count int) ([]Artist, error) {
+	var r struct {
+		Info struct {
+			Similar []wireArtist `json:"similarArtist"`
+		} `json:"artistInfo2"`
+	}
+	if err := c.call(ctx, "getArtistInfo2", url.Values{"id": {id}, "count": {strconv.Itoa(count)}}, &r); err != nil {
+		return nil, err
+	}
+	var out []Artist
+	for _, w := range r.Info.Similar {
+		if w.ID != "" {
+			out = append(out, w.artist())
+		}
+	}
+	return out, nil
+}
+
 // Search runs search3, 50 of each kind starting at offset.
 func (c *Client) Search(ctx context.Context, q string, offset int) ([]Artist, []Album, []Song, error) {
 	var r struct {

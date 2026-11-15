@@ -15,6 +15,10 @@ type Album struct {
 	ID, Name, Artist string
 	Year, SongCount  int
 	CoverArt         string
+	// OpenSubsonic's, from getArtist and getAlbum ("" and nil from a server without them): the
+	// album's genre, and its release types as the server writes them ("Album", "Single", "EP"...).
+	Genre        string
+	ReleaseTypes []string
 }
 
 type Artist struct {
@@ -98,12 +102,14 @@ func songs(ws []wireSong) []Song {
 }
 
 type wireAlbum struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Artist    string `json:"artist"`
-	Year      int    `json:"year"`
-	SongCount int    `json:"songCount"`
-	CoverArt  string `json:"coverArt"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Artist       string   `json:"artist"`
+	Year         int      `json:"year"`
+	SongCount    int      `json:"songCount"`
+	CoverArt     string   `json:"coverArt"`
+	Genre        string   `json:"genre"`
+	ReleaseTypes []string `json:"releaseTypes"`
 }
 
 func (w wireAlbum) album() Album { return Album(w) }

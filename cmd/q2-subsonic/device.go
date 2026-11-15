@@ -298,6 +298,12 @@ func (d *daemon) reply(req q2spot.Request) q2spot.Reply {
 		return d.withLead(d.albumList(ctx, cl, "byGenre", req.Arg(0), head, req.Arg(1)), req.Arg(1), false)
 	case "top":
 		return d.withLead(d.top(ctx, cl, req.Arg(0), req.Arg(1)), req.Arg(1), false)
+	case "singles": // the rows of an artist's page for firmware with "artist" (device_artist.go)
+		return d.withLead(d.singlesPage(ctx, cl, req.Arg(0), req.Arg(1)), req.Arg(1), false)
+	case "similar":
+		return d.withLead(d.similarPage(ctx, cl, req.Arg(0), req.Arg(1)), req.Arg(1), false)
+	case "songs":
+		return d.withLead(d.songsPage(ctx, cl, req.Arg(0), req.Arg(1)), req.Arg(1), false)
 	case "shuffle":
 		return d.shuffle(ctx, cl, req.Arg(0))
 	case "radio":
