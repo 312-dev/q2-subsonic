@@ -108,8 +108,8 @@ func (d *daemon) slCheck() {
 	switch {
 	case err != nil:
 		return
-	case was != 1:
-		d.slConnect(cl)
+	case was != 1, d.caps.Playlists && catalogue.PlsPending(d.dir):
+		d.slConnect(cl) // a connection's checks, or a playlist the Q2 changed meanwhile
 		return
 	}
 	d.sl.mu.Lock()
@@ -305,6 +305,7 @@ func (d *daemon) slConnect(cl *subsonic.Client) {
 	acct := d.acct()
 	st := d.store()
 	sent := d.slSendRatings(ctx, cl)
+	d.slSendPlaylists(ctx, cl) // before the playlists are read back, which then have the Q2's changes
 	hint, err := d.slHint(ctx, cl, st, acct)
 	if err != nil {
 		d.slFail("hint", err)
@@ -586,6 +587,30 @@ func (d *daemon) slSendRatings(ctx context.Context, cl *subsonic.Client) map[str
 		})
 	}
 	return res.Hearts
+}
+
+// slSendPlaylists sends playlists.out with the firmware's "playlists": each server playlist the Q2
+// changed gets its songs, its name or its deletion on the server, and what didn't go waits for the
+// next connection.
+func (d *daemon) slSendPlaylists(ctx context.Context, cl *subsonic.Client) {
+	if !d.caps.Playlists {
+		return
+	}
+	outs, err := catalogue.TakePls(d.card, d.dir)
+	if err != nil || len(outs) == 0 {
+		if err != nil {
+			d.log.Printf("server library: playlists.out: %v", err)
+		}
+		return
+	}
+	sent, rest, err := catalogue.SendPls(ctx, cl, outs)
+	if kerr := catalogue.KeepPls(d.card, d.dir, rest); kerr != nil {
+		d.log.Printf("server library: playlists.out: %v", kerr)
+	}
+	d.log.Printf("server library: %d playlist changes sent, %d left", sent, len(rest))
+	if err != nil {
+		d.slFail("playlists out", err)
+	}
 }
 
 // slCatplay answers the firmware's .catplay, a play pressed on a Library list with server rows:

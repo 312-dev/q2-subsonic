@@ -127,6 +127,7 @@ const (
 	CatName       = "catalogue.tsv"
 	AvailName     = "catalogue.avail"
 	OutName       = "ratings.out"
+	PlsOutName    = "playlists.out"
 	InName        = "ratings.in"
 	SongsName     = "server-songs.tsv"
 	PlaylistsName = "server-playlists.tsv"

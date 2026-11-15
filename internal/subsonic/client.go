@@ -617,6 +617,39 @@ func (c *Client) SetRating(ctx context.Context, id string, rating int) error {
 	return c.call(ctx, "setRating", url.Values{"id": {id}, "rating": {strconv.Itoa(rating)}}, nil)
 }
 
+// playlistChunk is the most song ids one createPlaylist or updatePlaylist sends, so a long
+// playlist's request stays well under a server's URL limit.
+const playlistChunk = 200
+
+// SetPlaylist makes an existing playlist's songs ids, in order: createPlaylist with its playlistId
+// replaces them with the first chunk, updatePlaylist adds the rest.
+func (c *Client) SetPlaylist(ctx context.Context, id string, ids []string) error {
+	q := url.Values{"playlistId": {id}}
+	first := ids[:min(len(ids), playlistChunk)]
+	q["songId"] = first
+	if err := c.call(ctx, "createPlaylist", q, nil); err != nil {
+		return err
+	}
+	for rest := ids[len(first):]; len(rest) > 0; {
+		n := min(len(rest), playlistChunk)
+		if err := c.call(ctx, "updatePlaylist", url.Values{"playlistId": {id}, "songIdToAdd": rest[:n]}, nil); err != nil {
+			return err
+		}
+		rest = rest[n:]
+	}
+	return nil
+}
+
+// RenamePlaylist renames a playlist (updatePlaylist's name).
+func (c *Client) RenamePlaylist(ctx context.Context, id, name string) error {
+	return c.call(ctx, "updatePlaylist", url.Values{"playlistId": {id}, "name": {name}}, nil)
+}
+
+// DeletePlaylist deletes a playlist.
+func (c *Client) DeletePlaylist(ctx context.Context, id string) error {
+	return c.call(ctx, "deletePlaylist", url.Values{"id": {id}}, nil)
+}
+
 // Star stars a song for the user; Unstar takes the star away.
 func (c *Client) Star(ctx context.Context, id string) error {
 	return c.call(ctx, "star", url.Values{"id": {id}}, nil)

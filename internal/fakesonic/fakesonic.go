@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"path"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -41,7 +42,7 @@ type Server struct {
 	Down      bool  // every connection is closed unanswered
 	NoEmpty   bool  // the empty query finds nothing, as on a server that doesn't take it
 	Calls     map[string]int
-	Writes    []string          // "setRating s1 3", "star s1", "unstar s1"
+	Writes    []string          // "setRating s1 3", "star s1", "unstar s1", "createPlaylist p1 s1,s2", "updatePlaylist p1 name=x add=s3", "deletePlaylist p1"
 	Covers    map[string][]byte // getCoverArt's picture by id; an id not here is error 70
 }
 
@@ -178,6 +179,39 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 		case "unstar":
 			s.Starred = ""
 			f.Writes = append(f.Writes, op+" "+s.ID)
+		}
+		ok(map[string]any{})
+	case "createPlaylist", "updatePlaylist", "deletePlaylist":
+		id := q.Get("playlistId")
+		if op == "deletePlaylist" {
+			id = q.Get("id")
+		}
+		i := 0
+		for i < len(f.Playlists) && f.Playlists[i].ID != id {
+			i++
+		}
+		if i == len(f.Playlists) {
+			fail(70, "Playlist not found")
+			return
+		}
+		p := &f.Playlists[i]
+		p.Changed = "2026-11-15T12:00:00Z"
+		switch op {
+		case "createPlaylist":
+			p.SIDs = append([]string(nil), q["songId"]...)
+			f.Writes = append(f.Writes, op+" "+id+" "+strings.Join(q["songId"], ","))
+		case "updatePlaylist":
+			w := op + " " + id
+			if n := q.Get("name"); n != "" {
+				p.Name, w = n, w+" name="+n
+			}
+			if add := q["songIdToAdd"]; len(add) > 0 {
+				p.SIDs, w = append(p.SIDs, add...), w+" add="+strings.Join(add, ",")
+			}
+			f.Writes = append(f.Writes, w)
+		case "deletePlaylist":
+			f.Playlists = append(f.Playlists[:i], f.Playlists[i+1:]...)
+			f.Writes = append(f.Writes, op+" "+id)
 		}
 		ok(map[string]any{})
 	case "getCoverArt":

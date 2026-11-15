@@ -272,6 +272,73 @@ func TestRatingsOut(t *testing.T) {
 	}
 }
 
+// playlists.out (the firmware's "playlists") goes to the server while it answers: a playlist's last
+// set alone, a rename, a delete that drops the earlier lines of its playlist; the catalogue written
+// after it has the server's new playlists. Without the word the file is left alone.
+func TestPlaylistsOut(t *testing.T) {
+	r := newCatRig(t, "playlist catalogue ratings playlists", fakesonic.Library(6))
+	r.f.Playlists = []fakesonic.Playlist{{ID: "p1", Name: "Mix", Changed: "t1", SIDs: []string{"s1", "s2"}},
+		{ID: "p2", Name: "Old", Changed: "t1", SIDs: []string{"s3"}}, {ID: "p3", Name: "Gone", Changed: "t1"}}
+	r.check(t)
+	r.f.Writes = nil
+	out := "set\tp1\ts1\ns2\nset\tp1\ts2\ts4\ts1\nname\tp2\tNew%09Name\nset\tp3\ts5\ndelete\tp3\nset\tp9\ts1\n"
+	out = strings.ReplaceAll(out, "\ns2\n", "\n") // a torn line is no change
+	os.WriteFile(r.file(catalogue.PlsOutName), []byte(out), 0o644)
+	r.check(t) // pending: the connection's checks run again
+	want := []string{"createPlaylist p1 s2,s4,s1", "updatePlaylist p2 name=New\tName", "deletePlaylist p3"}
+	if !slices.Equal(r.f.Writes, want) {
+		t.Fatalf("%q", r.f.Writes)
+	}
+	for _, n := range []string{catalogue.PlsOutName, catalogue.PlsOutName + ".sending"} {
+		if _, err := os.Stat(r.file(n)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s is there", n)
+		}
+	}
+	cat := strings.Join(catLines(t, r.file(catalogue.CatName)), "\n")
+	if !strings.Contains(cat, "p\tp2\tNew%09Name") || strings.Contains(cat, "\tp3\t") ||
+		!strings.Contains(cat, "i\tp1\ts4\t") {
+		t.Fatalf("the catalogue's playlists:\n%s", cat)
+	}
+	// A lost server keeps the lines for the next connection.
+	os.WriteFile(r.file(catalogue.PlsOutName), []byte("name\tp1\tLater\n"), 0o644)
+	r.f.Mu.Lock()
+	r.f.Down = true
+	r.f.Mu.Unlock()
+	r.slConnect(r.client())
+	if l := catLines(t, r.file(catalogue.PlsOutName+".sending")); len(l) != 1 || l[0] != "name\tp1\tLater" {
+		t.Fatal(l)
+	}
+	// An app without the firmware's word leaves the file as it is.
+	q := newCatRig(t, "playlist catalogue ratings", fakesonic.Library(2))
+	q.f.Playlists = []fakesonic.Playlist{{ID: "p1", Name: "Mix", Changed: "t1", SIDs: []string{"s1"}}}
+	os.MkdirAll(q.dir, 0o755)
+	os.WriteFile(q.file(catalogue.PlsOutName), []byte("name\tp1\tX\n"), 0o644)
+	q.check(t)
+	if q.calls("updatePlaylist") != 0 || len(catLines(t, q.file(catalogue.PlsOutName))) != 1 {
+		t.Fatal(q.f.Writes)
+	}
+}
+
+// A long playlist goes in chunks: createPlaylist with the first 200 songs, updatePlaylist adds the
+// rest, so no request outgrows a server's URL limit; an emptied one is set to no songs.
+func TestPlaylistsOutLong(t *testing.T) {
+	r := newCatRig(t, "playlist catalogue playlists", fakesonic.Library(250))
+	r.f.Playlists = []fakesonic.Playlist{{ID: "p1", Name: "Mix", Changed: "t1"}, {ID: "p2", Name: "Two", Changed: "t1", SIDs: []string{"s1"}}}
+	r.check(t)
+	r.f.Writes = nil
+	ids := make([]string, 250)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("s%d", i+1)
+	}
+	os.WriteFile(r.file(catalogue.PlsOutName), []byte("set\tp1\t"+strings.Join(ids, "\t")+"\nset\tp2\t\n"), 0o644)
+	r.check(t)
+	want := []string{"createPlaylist p1 " + strings.Join(ids[:200], ","), "updatePlaylist p1 add=" + strings.Join(ids[200:], ","),
+		"createPlaylist p2 "}
+	if !slices.Equal(r.f.Writes, want) || len(r.f.Playlists[0].SIDs) != 250 || len(r.f.Playlists[1].SIDs) != 0 {
+		t.Fatalf("%d writes, %d and %d songs", len(r.f.Writes), len(r.f.Playlists[0].SIDs), len(r.f.Playlists[1].SIDs))
+	}
+}
+
 // .catplay is answered with the usual .play: its seq, and a queue of the server rows (streamed)
 // and the card files as they are.
 func TestCatplay(t *testing.T) {

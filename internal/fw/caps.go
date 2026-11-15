@@ -21,6 +21,9 @@ type Caps struct {
 	// "album": the firmware draws an album's page from the rows the app adds with it (Shuffle, the
 	// album's artist, year, song count and running time, and each song's length).
 	Album bool
+	// "playlists": the firmware writes playlists.out when a server playlist changes on the Q2 (its
+	// songs, its name, its deletion), which the app sends on to the server.
+	Playlists bool
 }
 
 // ReadCaps reads the firmware capabilities from path. A missing file gives all false.
@@ -64,6 +67,8 @@ func ReadCaps(path string) Caps {
 			caps.Artist = true
 		case "album":
 			caps.Album = true
+		case "playlists":
+			caps.Playlists = true
 		}
 	}
 	return caps

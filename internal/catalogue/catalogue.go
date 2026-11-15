@@ -13,6 +13,8 @@
 //	catalogue.avail       a line appended for each song the stream cache gains or loses (Avail)
 //	ratings.out           the firmware's: hearts changed on the Q2, taken by renaming (TakeOut)
 //	ratings.in            the server's hearts that differ from what the Q2 was told (WriteIn)
+//	playlists.out         the firmware's: server playlists changed on the Q2, taken by renaming
+//	                      (TakePls)
 //	covers/               the catalogue's album covers, <album id>.jpg, within a budget (Covers)
 //
 // No file holds the whole library in memory: songs are read and written a line at a time.
