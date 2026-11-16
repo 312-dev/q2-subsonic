@@ -98,6 +98,9 @@ Newer Q2 Pod firmware offers extensions to card apps. Without them everything st
 | `libsource` | Show in Library follows the Library's **Streaming Songs** switch: it is On only while the switch is, turning it on turns the switch on (the Q2 asks first), and the app pauses while the switch is off. | Show in Library is On or Off by its own setting, whatever the Library shows. |
 | `artist` | An artist's page says its albums, singles, songs and genre, and has Singles & EPs, Similar Artists and All Songs; songs show their album and length. | The artist's page has Play, Shuffle, Radio, Top Songs and its releases. |
 | `album` | An album's page has Shuffle beside Play, says its artist, year, song count and running time, and shows each song's length. | The album's page has Play and its songs. |
+| `signin` | **Sign In from Your Phone** opens the QR page in one press, the Q2 follows the phone's steps (**Continue on Your Phone**, **Signing In…**, **Signed In** or why it failed) on a page of its own, and the sign-in page stops when you leave the QR page. | Press the row a second time to open the QR page, which shows the outcome beside the code; the sign-in page stops after a pause in the page's refreshes once the QR page is left. |
+| `playlists` | With Show in Library, a server playlist you change on the Q2 (songs added or removed, a new name, deleted) is changed on the server too, and its server cover shows on its row in Playlists. | A playlist changed on the Q2 is put back as the server has it at the next sync; no cover on the row. |
+| `storage` | **System settings → Storage** shows the card space taken by Downloads (`Subsonic/`) and the Stream Cache (`.subsonic/`), lists each item you sync with its size (press to open it, hold Play/Pause to take it out of Sync), and sets a Downloads **Limit** that a sync can't go past. | The app writes no storage files and there is no Downloads limit. |
 
 ## Errors and logs
 
