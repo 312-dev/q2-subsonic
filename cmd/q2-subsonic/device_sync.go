@@ -395,13 +395,23 @@ func (d *daemon) syncRows(s syncer.Snapshot) q2spot.Reply {
 
 func eta(t time.Duration) string {
 	m := int(t.Round(time.Minute) / time.Minute)
-	switch {
-	case m < 1:
+	if m < 1 {
 		return "Less than a minute left"
-	case m < 60:
-		return fmt.Sprintf("About %d min left", m)
 	}
-	return fmt.Sprintf("About %d h %d min left", m/60, m%60)
+	return "About " + minutes(m) + " left"
+}
+
+// minutes is a length of m minutes as the firmware writes time (Q2 Pod's docs/oled-design.md):
+// single-letter units attach ("1h12m", "2h"), and "min" keeps its space when it stands alone
+// ("45 min").
+func minutes(m int) string {
+	switch {
+	case m < 60:
+		return fmt.Sprintf("%d min", m)
+	case m%60 == 0:
+		return fmt.Sprintf("%dh", m/60)
+	}
+	return fmt.Sprintf("%dh%dm", m/60, m%60)
 }
 
 func (d *daemon) doneRows(s syncer.Snapshot) q2spot.Reply {

@@ -641,6 +641,17 @@ func TestSyncNotEnoughSpace(t *testing.T) {
 	}
 }
 
+// Time is written as the firmware writes it: single-letter units attach, "min" alone keeps its space.
+func TestETATimeUnits(t *testing.T) {
+	for d, want := range map[time.Duration]string{20 * time.Second: "Less than a minute left",
+		45 * time.Minute: "About 45 min left", time.Hour: "About 1h left", 72 * time.Minute: "About 1h12m left",
+		122 * time.Minute: "About 2h2m left"} {
+		if got := eta(d); got != want {
+			t.Errorf("eta(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
 func TestProgressRowKindByCaps(t *testing.T) {
 	snap := syncer.Snapshot{State: "running", Permille: 470, Done: 112, Total: 240, ETA: 6 * time.Minute, Current: "Artist – Song"}
 	d := newTestDaemon(t, &nav{}, "progress", true)

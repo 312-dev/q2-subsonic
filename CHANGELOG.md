@@ -16,6 +16,7 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ### Fixed
 
+- A sync's time left is written as the Q2 writes time: **About 1h12m left**, **About 45 min left**.
 - The phone sign-in no longer stops when the Q2's screen turns off before the code is scanned (with Q2 Pod's `signin` extension: the app then knows the QR page was left from the firmware, not from a pause in the page's refreshes).
 - A link from the QR code opened from a phone's camera no longer lands on the PIN step: the page's cookie was set on a redirect, which a cross-site visit doesn't carry.
 
