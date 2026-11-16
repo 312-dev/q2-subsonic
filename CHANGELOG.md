@@ -8,6 +8,8 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ### Added
 
+- Song radio: Now Playing's **Radio** on a song from your server starts an endless radio of songs like it (`getSimilarSongs2` with the song's id), the song playing on where it is. More songs are added when about 10 are left, and none played or queued lately (the last 200) comes back; the Q2's blue **Radio** pill lights while it plays, and a tap on it stops it, the queued songs playing on. An artist's **Radio** is endless the same way. Now Playing's Radio requires a Q2 Pod with the `radio` extension; an artist's Radio is endless on any.
+
 - The Q2's status bar shows when the app is busy with your server: turning arrows while it checks the server or your library, and a ring filling up while a sync downloads songs. Requires a Q2 Pod that shows it (its status row's sync indicator); an older one ignores it.
 
 ## [0.9] - 2026-11-16
