@@ -136,7 +136,7 @@ func (s *signin) start(port int) {
 	go s.srv.Serve(capListener{ln, s.conns})
 	go s.watch(s.done)
 
-	kv := map[string]string{"pin": s.pin, "note": "Scan with your phone"}
+	kv := map[string]string{"pin": s.pin, "note": "Scan with your phone to sign in"} // under the code
 	if ip := q2.LocalIP(); ip == "" {
 		kv["addr"], kv["qr"], kv["qrsize"], kv["note"] = "", "", "0", "Connect the Q2 to Wi-Fi"
 	} else {
