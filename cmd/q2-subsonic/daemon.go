@@ -98,14 +98,22 @@ func (s settings) stream() string {
 	return s.StreamQuality
 }
 
-// stateKeys is the state file: sign-in's QR keys, hold=1, version and the Server Library's
-// server=up or down, merged so no writer drops another's keys.
+// stateKeys is the state file: sign-in's QR keys, hold=1, version, the Server Library's
+// server=up or down and what the app syncs (sync=, syncState), merged so no writer drops another's keys.
 type stateKeys struct {
 	st     *q2.State
 	mu     sync.Mutex
 	sign   map[string]string
 	hold   bool
 	server string // "" writes no server key
+	sync   string // "" writes no sync key
+}
+
+func (s *stateKeys) setSync(v string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sync = v
+	return s.flush()
 }
 
 func (s *stateKeys) setServer(v string) error {
@@ -145,6 +153,9 @@ func (s *stateKeys) flush() error {
 	}
 	if s.server != "" {
 		m["server"] = s.server
+	}
+	if s.sync != "" {
+		m["sync"] = s.sync
 	}
 	return s.st.Write(m)
 }
@@ -591,6 +602,7 @@ func (d *daemon) tick() {
 	}
 	d.qrLeft()
 	d.state.setHold(busy || d.signin.active() || d.stream.busy() || d.sl.busy.Load())
+	d.state.setSync(d.syncState())
 	d.slTick()
 	d.stTick()
 	if d.caps.Library {
@@ -598,6 +610,27 @@ func (d *daemon) tick() {
 		d.libPoll()
 		d.mu.Unlock()
 	}
+}
+
+// syncState is the state file's sync= for Q2 Pod's status row (its docs/internals.md#card-app-sync):
+// "down DONE TOTAL" while a sync downloads songs (bytes, or songs before their sizes are known),
+// "check" while a sync's check or the Server Library's connection checks or walk ask the server, ""
+// while idle. The file is rewritten only when it changes (q2.State), so a download's progress
+// writes it about once a tick.
+func (d *daemon) syncState() string {
+	if s := d.runner.Snapshot(); s.State == "running" {
+		if s.BytesTotal > 0 {
+			return fmt.Sprintf("down %d %d", s.BytesDone, s.BytesTotal)
+		}
+		return fmt.Sprintf("down %d %d", s.Done, s.Total)
+	}
+	d.mu.Lock()
+	checking := d.preview != nil && !d.preview.done
+	d.mu.Unlock()
+	if checking || d.sl.checking.Load() {
+		return "check"
+	}
+	return ""
 }
 
 // qrLeft stops the sign-in once the QR page is left, on Q2 Pod with "signin": the firmware keeps

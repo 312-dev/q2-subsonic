@@ -44,6 +44,7 @@ var batteryStatus = "/sys/class/power_supply/battery/status"
 type serverLib struct {
 	on        atomic.Bool // Show in Library, as last saved
 	busy      atomic.Bool // a connection's checks, a walk or a catalogue write runs: one at a time
+	checking  atomic.Bool // a connection's checks or a walk asks the server now: the state file's sync=check
 	streaming atomic.Bool // Streaming Songs, as q2-addon.library last said; always on without "libsource"
 
 	mu       sync.Mutex
@@ -163,6 +164,8 @@ func (d *daemon) slCheck() {
 	case err != nil:
 		return
 	case was != 1, d.caps.Playlists && catalogue.PlsPending(d.dir):
+		d.sl.checking.Store(true)
+		defer d.sl.checking.Store(false)
 		d.slConnect(cl) // a connection's checks, or a playlist the Q2 changed meanwhile
 		return
 	}
@@ -170,6 +173,8 @@ func (d *daemon) slCheck() {
 	walk := d.sl.resync || d.sl.due && (d.slIdle() || charging())
 	d.sl.mu.Unlock()
 	if walk {
+		d.sl.checking.Store(true)
+		defer d.sl.checking.Store(false)
 		d.slWalk(cl)
 		return
 	}
