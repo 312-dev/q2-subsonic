@@ -26,6 +26,9 @@ type Caps struct {
 	// "artist": the firmware draws an artist's page from the rows the app adds with it (counts and
 	// genre, Singles & EPs, Similar Artists, All Songs, and songs' album, length and album id).
 	Artist bool
+	// "album": the firmware draws an album's page from the rows the app adds with it (Shuffle, the
+	// album's artist, year, song count and running time, and each song's length).
+	Album bool
 }
 
 // ReadCaps reads the firmware capabilities from path. A missing file gives all false.
@@ -71,6 +74,8 @@ func ReadCaps(path string) Caps {
 			caps.Libsource = true
 		case "artist":
 			caps.Artist = true
+		case "album":
+			caps.Album = true
 		}
 	}
 	return caps
