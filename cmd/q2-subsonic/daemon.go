@@ -49,8 +49,9 @@ type settings struct {
 	StreamQuality  string `json:"streamQuality,omitempty"`
 	NoReport       bool   `json:"noReport,omitempty"`
 	StreamCacheMB  int    `json:"streamCacheMB,omitempty"`
-	Library        bool   `json:"library,omitempty"` // Show in Library (catalogue.go)
-	Home           string `json:"home,omitempty"`
+	Library        bool   `json:"library,omitempty"`          // Show in Library (catalogue.go)
+	Home           string `json:"home,omitempty"`             // the server's home address (home.go)
+	LimitMB        int    `json:"downloadsLimitMB,omitempty"` // Downloads' limit in MB, 0 for none (storage.go)
 }
 
 // cacheSizes are Stream Cache's steps in MB, the firmware's Spotify Cache sizes, and Off.
@@ -158,6 +159,7 @@ type preview struct {
 	full    bool               // started by Check Again: the library cache is not used
 	note    string             // how far the check has come, such as "4500 of 10000 songs"; under daemon.mu
 	reclaim int64              // bytes of the plan's free space that are the stream cache's to give
+	over    int64              // bytes the plan would take the downloads past their limit (storage.go)
 }
 
 type libJob struct {
@@ -263,6 +265,7 @@ type daemon struct {
 	clearAt            time.Time        // Clear Cache's first press: a second one soon after clears
 	sl                 serverLib        // the Server Library (catalogue.go)
 	qrSeen             bool             // the QR page's marker was there since the sign-in started (qrLeft)
+	st                 stState          // Settings > Storage's files (storage.go)
 
 	bg sync.WaitGroup // the work replies leave running (ping, preview, play, sign-out's stops); tests wait for it
 }
@@ -522,6 +525,7 @@ func (d *daemon) saveSelection(s selection.Set) error {
 	st := d.runner.Snapshot().State
 	d.mu.Lock()
 	d.gen++
+	d.st.pending = true // Storage's items follow the selection
 	if st != "running" && st != "paused" {
 		d.showDone = false
 	}
@@ -588,6 +592,7 @@ func (d *daemon) tick() {
 	d.qrLeft()
 	d.state.setHold(busy || d.signin.active() || d.stream.busy() || d.sl.busy.Load())
 	d.slTick()
+	d.stTick()
 	if d.caps.Library {
 		d.mu.Lock()
 		d.libPoll()

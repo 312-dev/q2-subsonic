@@ -32,6 +32,9 @@ type Caps struct {
 	// "playlists": the firmware writes playlists.out when a server playlist changes on the Q2 (its
 	// songs, its name, its deletion), which the app sends on to the server.
 	Playlists bool
+	// Settings > Storage (q2-coda's docs/internals.md#storage): the firmware reads storage.tsv and
+	// writes storage.out. The app writes neither without the word.
+	Storage bool
 }
 
 // ReadCaps reads the firmware capabilities from path. A missing file gives all false.
@@ -81,6 +84,8 @@ func ReadCaps(path string) Caps {
 			caps.Album = true
 		case "playlists":
 			caps.Playlists = true
+		case "storage":
+			caps.Storage = true
 		}
 	}
 	return caps
