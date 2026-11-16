@@ -26,6 +26,7 @@ Things to know:
 - The sign-in page runs only after you press **Sign In from Your Phone**, and stops when you are signed in, when you leave the QR page, or after 10 minutes. Until you press it, the app opens no port.
 - The password crosses your local Wi-Fi unencrypted, once, from the phone to the Q2. Do it on a network you trust.
 - The server must be `https://`; `http://` is refused. Certificates are verified.
+- **A server on your tailnet** (a `*.ts.net` name, a `100.x` Tailscale address, or your own domain pointed at one): turn on **System Settings → Tailscale** on the Q2 and sign in there (a Q2 Pod build with that setting, and `tailscaled` on the card). The app then reaches tailnet servers through the Q2's tailscaled and everything else directly; certificates are verified the same way. Without it, a tailnet server can't be reached.
 - The password is stored on the card, in `.subsonic/credentials`. If your server offers OpenSubsonic API keys (`apiKeyAuthentication`), enter a key from its settings as the password instead: then only the key is stored. exFAT has no file permissions, so anyone with the card can read it. **Make a server user just for the Q2, not an admin.** If the card is lost, delete that user on the server and the card is worthless.
 - **Settings → Account → Sign Out** removes the stored login and empties the Stream Cache, but for a list that is still playing. Your synced music stays on the card.
 

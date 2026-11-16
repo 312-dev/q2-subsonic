@@ -6,6 +6,10 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ## [Unreleased]
 
+### Added
+
+- **Servers on your tailnet.** With Tailscale on in Q2 Pod (System Settings → Tailscale), a server at a `*.ts.net` name, a Tailscale `100.x` address, or a domain of yours that points at one is reached through the Q2's Tailscale; other servers and the internet are reached directly, as before. Certificates are checked as before. Requires a Q2 Pod with the Tailscale setting; without it, nothing changes.
+
 ## [0.8] - 2026-11-14
 
 ### Added

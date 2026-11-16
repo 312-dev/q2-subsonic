@@ -131,6 +131,7 @@ func fetchDate(u string) (time.Time, error) {
 // used: it is empty for an IP address, which would skip the name check.
 func dateTransport(roots *x509.CertPool, host string) *http.Transport {
 	return &http.Transport{
+		Proxy:             TailnetProxy, // a tailnet server's Date comes through tailscaled too
 		DisableKeepAlives: true,
 		TLSClientConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
@@ -171,6 +172,7 @@ func newTransport(roots *x509.CertPool, timeout time.Duration) *http.Transport {
 		return t
 	}
 	t := &http.Transport{
+		Proxy:                 TailnetProxy, // tailnet.go: a tailnet server through tailscaled
 		DialContext:           (&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   timeout,
 		ResponseHeaderTimeout: timeout,
