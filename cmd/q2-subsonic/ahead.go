@@ -1,0 +1,257 @@
+package main
+
+// Download Ahead and the streaming state (q2-coda's docs/server-library.md, "Download Ahead and the
+// streaming state"). With the firmware's "ahead" word it writes /tmp/q2-<id>.ahead, the songs
+// after the one playing in its own play order and how many to fetch, and reads
+// /tmp/q2-<id>.stream, which this file writes: how far each planned song has come. With "grow"
+// its player plays a song while it arrives, so a song is written in place and listed in
+// stream/.growing until it is whole.
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/andsuor/q2-subsonic/internal/library"
+	"github.com/andsuor/q2-subsonic/internal/q2"
+	"github.com/andsuor/q2-subsonic/internal/q2spot"
+)
+
+const (
+	statusEvery = 500 * time.Millisecond // .stream's pace while a song arrives: the firmware's 3 s staleness has room
+	stallAfter  = 2 * time.Second        // no byte for this long: a get line reads stall
+)
+
+// aheadReq is the firmware's .ahead: for the .play of seq, fetch n of paths, the songs after the
+// one playing in its play order.
+type aheadReq struct {
+	seq   int64
+	n     int
+	paths []string
+}
+
+// readAhead reads an .ahead file; ok is false when there is none or its header is not one.
+func readAhead(path string) (a aheadReq, ok bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return a, false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	if !sc.Scan() {
+		return a, false
+	}
+	head := strings.Split(strings.TrimRight(sc.Text(), "\r"), "\t")
+	if head[0] != "#Q2AHEAD/1" {
+		return a, false
+	}
+	seen := 0
+	for _, kv := range head[1:] {
+		k, v, _ := strings.Cut(kv, "=")
+		switch k {
+		case "seq":
+			if a.seq, err = strconv.ParseInt(v, 10, 64); err == nil {
+				seen++
+			}
+		case "n":
+			if a.n, err = strconv.Atoi(v); err == nil && a.n >= 0 {
+				seen++
+			}
+		}
+	}
+	for sc.Scan() {
+		if p := strings.TrimRight(sc.Text(), "\r"); p != "" {
+			a.paths = append(a.paths, p)
+		}
+	}
+	return a, seen == 2
+}
+
+// grows reports whether songs are written in place for a player that plays them as they arrive.
+func (s *streamer) grows() bool { return s.caps.Playlist && s.caps.Ahead && s.caps.Grow }
+
+// whole reports whether a song's file is there and complete: not one still arriving in place.
+func (s *streamer) whole(path string) bool {
+	s.gmu.Lock()
+	g := s.growing[path]
+	s.gmu.Unlock()
+	return !g && exists(path)
+}
+
+func (s *streamer) journal() string { return filepath.Join(s.dir(), ".growing") }
+
+// setGrowing marks path as arriving in place (or no longer) and writes .growing, the list a start
+// after a crash or a pulled card deletes (dropGrowing), so a cut file is never taken for whole.
+func (s *streamer) setGrowing(path string, on bool) error {
+	s.gmu.Lock()
+	defer s.gmu.Unlock()
+	if s.growing == nil {
+		s.growing = map[string]bool{}
+	}
+	if on {
+		s.growing[path] = true
+	} else {
+		delete(s.growing, path)
+	}
+	paths := make([]string, 0, len(s.growing))
+	for p := range s.growing {
+		paths = append(paths, p)
+	}
+	slices.Sort(paths)
+	var b strings.Builder
+	for _, p := range paths {
+		b.WriteString(p + "\n")
+	}
+	if err := os.MkdirAll(s.dir(), 0o755); err != nil {
+		return err
+	}
+	return q2.WriteFile(s.journal(), []byte(b.String()))
+}
+
+// dropGrowing deletes the files .growing lists, cut by a crash or a pulled card, and the list.
+// Only paths in the stream folder: the list is the app's, but it is a file on the card.
+func (s *streamer) dropGrowing() {
+	b, err := os.ReadFile(s.journal())
+	if err != nil {
+		return
+	}
+	for _, p := range strings.Split(string(b), "\n") {
+		if p != "" && strings.HasPrefix(p, s.dir()+string(filepath.Separator)) {
+			s.logf("stream: deleting %s, cut while it arrived", filepath.Base(p))
+			library.Remove(s.root, p)
+		}
+	}
+	library.Remove(s.root, s.journal())
+}
+
+// plan is the songs to have, in order: the one playing, then n more (Off being none) as the
+// firmware's .ahead for this queue names them: the songs its queue holds after the one playing, in
+// its play order. Its queue is the m3u's lines up to the first one not there yet, so when it
+// names fewer, the rest are the list's songs after the one playing not yet whole, in list order:
+// the ones it queues next. Without an .ahead, the list's next streamWindow.
+func (r *streamRun) plan(cur int) []int {
+	out := []int{cur}
+	if r.s.caps.Ahead && r.s.aheadFile != "" {
+		if a, ok := readAhead(r.s.aheadFile); ok && a.seq == r.playSeq {
+			for _, p := range a.paths {
+				if len(out) > a.n {
+					break
+				}
+				if i := r.find(p, cur); i >= 0 && !slices.Contains(out, i) {
+					out = append(out, i)
+				}
+			}
+			for i := cur + 1; i < len(r.jobs) && len(out) <= a.n; i++ {
+				if j := r.jobs[i]; j.fetch && !r.s.whole(j.path) && !slices.Contains(out, i) {
+					out = append(out, i)
+				}
+			}
+			return out
+		}
+	}
+	for i := cur + 1; i < len(r.jobs) && i <= cur+streamWindow; i++ {
+		out = append(out, i)
+	}
+	return out
+}
+
+// find is the job playing from path: the first after cur, else the first from the list's start.
+func (r *streamRun) find(path string, cur int) int {
+	for i := cur + 1; i < len(r.jobs); i++ {
+		if r.jobs[i].path == path {
+			return i
+		}
+	}
+	for i := r.from; i <= cur && i < len(r.jobs); i++ {
+		if r.jobs[i].path == path {
+			return i
+		}
+	}
+	return -1
+}
+
+// progress is the download running now, for .stream.
+type progress struct {
+	job          int   // its job, -1 for none
+	have, total  int64 // bytes on the card, and of the whole (0 unknown)
+	movedAt      time.Time
+	lastBody     string
+	lastAt       time.Time
+	lastArriving bool
+}
+
+// status writes .stream: a line for each planned song the server sends (want the one arriving),
+// at once when a line changes, and every statusEvery while one arrives. Without "ahead" nothing.
+func (r *streamRun) status(plan []int, want int) {
+	s := r.s
+	if !s.caps.Ahead || s.statusFile == "" {
+		return
+	}
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+	p := &r.prog
+	var b strings.Builder
+	fmt.Fprintf(&b, "#Q2STREAM/1\tseq=%d\n", r.playSeq)
+	arriving := false
+	for _, i := range plan {
+		j, sg := r.jobs[i], r.songs[i]
+		if !j.fetch && !j.cached {
+			continue
+		}
+		state, have, total := "wait", int64(0), expect(sg, j.quality)
+		switch {
+		case i == want && p.job == i:
+			state, have, arriving = "get", p.have, true
+			if p.total > 0 {
+				total = p.total
+			}
+			if time.Since(p.movedAt) >= cmpOr(s.stallAfter, stallAfter) {
+				state = "stall"
+			}
+		case s.whole(j.path):
+			state = "done"
+			if st, err := os.Stat(j.path); err == nil {
+				have, total = st.Size(), st.Size()
+			}
+		case j.away || j.failed:
+			state = "fail"
+		}
+		fmt.Fprintf(&b, "%s\t%d\t%d\t%d\t%s\n", state, have, total, int64(sg.Duration)*1000, q2spot.Escape(j.path))
+	}
+	body := b.String()
+	if body == p.lastBody && !(arriving && time.Since(p.lastAt) >= cmpOr(s.statusEvery, statusEvery)) {
+		return
+	}
+	if err := q2.WriteFile(s.statusFile, []byte(body)); err != nil {
+		s.logf("stream: status: %v", err)
+		return
+	}
+	p.lastBody, p.lastAt, p.lastArriving = body, time.Now(), arriving
+}
+
+func cmpOr(d, def time.Duration) time.Duration {
+	if d > 0 {
+		return d
+	}
+	return def
+}
+
+// counter counts the bytes a download writes into the run's progress.
+type counter struct {
+	r *streamRun
+}
+
+func (c counter) Write(b []byte) (int, error) {
+	if len(b) > 0 {
+		c.r.s.pmu.Lock()
+		c.r.prog.have += int64(len(b))
+		c.r.prog.movedAt = time.Now()
+		c.r.s.pmu.Unlock()
+	}
+	return len(b), nil
+}

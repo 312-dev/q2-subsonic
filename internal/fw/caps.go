@@ -35,6 +35,11 @@ type Caps struct {
 	// Settings > Storage (q2-coda's docs/internals.md#storage): the firmware reads storage.tsv and
 	// writes storage.out. The app writes neither without the word.
 	Storage bool
+	// "ahead": the firmware writes /tmp/q2-<id>.ahead, the songs after the one playing in its play
+	// order and how many to fetch (Download Ahead), and reads /tmp/q2-<id>.stream, how far each one
+	// has come. "grow": its player plays a song while it arrives, so the app writes it in place
+	// rather than as a .part (q2-coda's docs/server-library.md#download-ahead-and-the-streaming-state).
+	Ahead, Grow bool
 }
 
 // ReadCaps reads the firmware capabilities from path. A missing file gives all false.
@@ -86,6 +91,10 @@ func ReadCaps(path string) Caps {
 			caps.Playlists = true
 		case "storage":
 			caps.Storage = true
+		case "ahead":
+			caps.Ahead = true
+		case "grow":
+			caps.Grow = true
 		}
 	}
 	return caps

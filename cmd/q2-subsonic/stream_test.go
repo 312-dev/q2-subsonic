@@ -57,7 +57,11 @@ func (f *fakeSrc) Get(_ context.Context, u string, _ int64) (*http.Response, err
 	}
 	if f.body != nil {
 		b, n := f.body(u)
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(b), ContentLength: n}, nil
+		rc, ok := b.(io.ReadCloser)
+		if !ok {
+			rc = io.NopCloser(b)
+		}
+		return &http.Response{StatusCode: 200, Body: rc, ContentLength: n}, nil
 	}
 	b := "data-" + u
 	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(b)), ContentLength: int64(len(b))}, nil

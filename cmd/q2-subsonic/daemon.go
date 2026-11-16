@@ -318,6 +318,8 @@ func newDaemon(dir, card, tmp string) *daemon {
 	d.stream = newStreamer(card, filepath.Join(tmp, "q2-subsonic.play"), filepath.Join(tmp, "q2-subsonic.playing"),
 		d.caps, src{d}, d.manifest, syncer.Net, time.Second)
 	d.stream.log = lg
+	d.stream.aheadFile = filepath.Join(tmp, "q2-subsonic.ahead") // Download Ahead (ahead.go)
+	d.stream.statusFile = filepath.Join(tmp, "q2-subsonic.stream")
 	d.stream.quality = func() string { return d.settings().stream() }
 	d.stream.moving = d.runner.Moving
 	// An older build's Streaming: Direct left its URL queue here, which carries the sign-in.

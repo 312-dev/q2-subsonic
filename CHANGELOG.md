@@ -9,6 +9,7 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 ### Added
 
 - The Q2's status bar shows when the app is busy with your server: turning arrows while it checks the server or your library, and a ring filling up while a sync downloads songs. Requires a Q2 Pod that shows it (its status row's sync indicator); an older one ignores it.
+- **Download Ahead:** while a list streams, the app downloads the songs the Q2 will play next, in the Q2's own order (shuffle and Up Next included), so a skip or the next song starts at once. How many (Off, 1, 2 or 3; 2 by default) is the Q2's **Streaming → Configuration → Download Ahead**; a song that leaves the plan while it downloads is dropped and the new next song fetched. The app also tells the Q2 how far each song has downloaded, which Now Playing shows while a song loads, and on a Q2 Muse whose player can play a song as it arrives, a song starts after a few seconds of it rather than once all of it is on the card. Requires a Q2 Muse with the `ahead` extension (and `grow` for the early start); on older firmware the app downloads the next two songs of the list, as before.
 
 ## [0.9] - 2026-11-16
 
