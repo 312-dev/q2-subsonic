@@ -19,6 +19,10 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 - The phone sign-in no longer stops when the Q2's screen turns off before the code is scanned (with Q2 Pod's `signin` extension: the app then knows the QR page was left from the firmware, not from a pause in the page's refreshes).
 - A link from the QR code opened from a phone's camera no longer lands on the PIN step: the page's cookie was set on a redirect, which a cross-site visit doesn't carry.
 
+### Security
+
+- `.subsonic/log.txt` no longer names the server user of each request: the user name is hidden as the password, token and API key already were. At start the app hides it in what an older version left in `log.txt` and `log.txt.1`.
+
 ## [0.7] - 2026-11-12
 
 ### Fixed

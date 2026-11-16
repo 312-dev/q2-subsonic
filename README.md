@@ -92,7 +92,7 @@ Newer Q2 Pod firmware offers extensions to card apps. Without them everything st
 
 ## Errors and logs
 
-A failure shows a short message on screen. Open its **Details** row for the operation, the HTTP status or Subsonic error code, and the time. The full trail is in `.subsonic/log.txt`; passwords and tokens are never logged. An internal error while one page is answered shows "Something went wrong" with **Retry**, and its trace goes there too; a sync or stream carries on. If the app crashed, its trace and exit code are added there at the next start. **Settings** shows the app's version, for a bug report.
+A failure shows a short message on screen. Open its **Details** row for the operation, the HTTP status or Subsonic error code, and the time. The full trail is in `.subsonic/log.txt` (the older part in `log.txt.1`); the user name, password, tokens and API key a request signs in with are never logged, and at start the app takes out any that an older version left there. An internal error while one page is answered shows "Something went wrong" with **Retry**, and its trace goes there too; a sync or stream carries on. If the app crashed, its trace and exit code are added there at the next start. **Settings** shows the app's version, for a bug report.
 
 ## Update and remove
 

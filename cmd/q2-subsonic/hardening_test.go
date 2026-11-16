@@ -163,3 +163,26 @@ func TestNoPagesWithoutCap(t *testing.T) {
 		t.Fatalf("cursor %q, message %q", r.Cursor, r.Message)
 	}
 }
+
+// At start-up the app redacts what an older build left in log.txt and log.txt.1.
+func TestStartScrubsLog(t *testing.T) {
+	card, tmp := t.TempDir(), t.TempDir()
+	dir := filepath.Join(card, ".subsonic")
+	os.MkdirAll(dir, 0o755)
+	line := "2026-11-01 10:00:01 GET https://music.example/rest/ping?c=q2-subsonic&f=json&s=5a1t5a1t5a1t&t=70ken70ken70ken&u=aliceUser7&v=1.13.0 -> 200\n"
+	os.WriteFile(filepath.Join(dir, "log.txt"), []byte(line), 0o600)
+	os.WriteFile(filepath.Join(dir, "log.txt.1"), []byte(strings.Replace(line, "s=5a1t", "apiKey=K3YSECRET99&s=5a1t", 1)), 0o600)
+	d := newDaemon(dir, card, tmp)
+	d.bg.Wait()
+	for _, n := range []string{"log.txt", "log.txt.1"} {
+		b, _ := os.ReadFile(filepath.Join(dir, n))
+		for _, bad := range []string{"5a1t5a1t5a1t", "70ken70ken70ken", "aliceUser7", "K3YSECRET99"} {
+			if strings.Contains(string(b), bad) {
+				t.Fatalf("%s keeps %q:\n%s", n, bad, b)
+			}
+		}
+		if !strings.Contains(string(b), "u=***&v=1.13.0 -> 200") {
+			t.Fatalf("%s:\n%s", n, b)
+		}
+	}
+}

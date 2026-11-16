@@ -801,3 +801,50 @@ func TestArtistIDOnlyFromGetSong(t *testing.T) {
 		t.Fatalf("a list's song holds the artist id: %s", b)
 	}
 }
+
+// No credential of a request reaches the log or an error, on an answer or on a refused
+// connection (whose error net/http writes with the whole URL): not the user name, the token and
+// its salt, nor an API key. The parameters' names stay, so a line still shows how it signed in.
+func TestLogRedactsCredentials(t *testing.T) {
+	var q url.Values
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q = r.URL.Query()
+		w.Write([]byte(`{"subsonic-response":{"status":"ok","version":"1.16.1"}}`))
+	}))
+	path := t.TempDir() + "/log.txt"
+	lg := applog.Open(path, 1<<20)
+	tok, _ := New(Creds{Server: srv.URL, User: "aliceUser7", Password: "pw0rdSecret"}, srv.Client())
+	key, _ := New(Creds{Server: srv.URL, APIKey: "K3YSECRET99"}, srv.Client())
+	tok.Log, key.Log = lg, lg
+	if err := tok.Ping(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	salt, token := q.Get("s"), q.Get("t")
+	if err := key.Ping(context.Background()); err != nil || q.Get("apiKey") != "K3YSECRET99" {
+		t.Fatal(err, q)
+	}
+	srv.Close() // connection refused from here on
+	var errs []string
+	for _, c := range []*Client{tok, key} {
+		if err := c.Ping(context.Background()); err == nil {
+			t.Fatal("a closed server answered")
+		} else {
+			errs = append(errs, err.Error())
+		}
+	}
+	b, _ := os.ReadFile(path)
+	all := string(b) + strings.Join(errs, "\n")
+	if strings.Count(string(b), "\n") != 4 || !strings.Contains(string(b), "connection refused") {
+		t.Fatalf("log:\n%s", b)
+	}
+	for _, bad := range []string{"aliceUser7", "pw0rdSecret", "K3YSECRET99", salt, token} {
+		if bad == "" || strings.Contains(all, bad) {
+			t.Fatalf("%q in\n%s", bad, all)
+		}
+	}
+	for _, kept := range []string{"u=***", "t=***", "s=***", "apiKey=***"} {
+		if !strings.Contains(string(b), kept) {
+			t.Fatalf("no %s in\n%s", kept, b)
+		}
+	}
+}

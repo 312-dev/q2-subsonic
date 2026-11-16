@@ -272,6 +272,9 @@ func (d *daemon) spawn(f func()) {
 func newDaemon(dir, card, tmp string) *daemon {
 	os.MkdirAll(dir, 0o755)
 	lg := applog.Open(filepath.Join(dir, "log.txt"), 1<<20)
+	if err := lg.Scrub(); err != nil { // an older build's lines kept the user name of each request
+		lg.Printf("log: scrub: %v", err)
+	}
 	d := &daemon{dir: dir, card: card, tmp: tmp, log: lg,
 		caps:  fw.ReadCaps(filepath.Join(tmp, "q2-addon.caps")),
 		state: &stateKeys{st: &q2.State{Path: filepath.Join(tmp, "q2-subsonic.state")}},
