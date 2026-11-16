@@ -23,6 +23,9 @@ type Caps struct {
 	// row, the page draws the state file's step (signin.go), and while it is open the firmware keeps
 	// /tmp/q2-<id>.qrpage, so the app knows the page was left without timing the menu's refreshes.
 	Signin bool
+	// "artist": the firmware draws an artist's page from the rows the app adds with it (counts and
+	// genre, Singles & EPs, Similar Artists, All Songs, and songs' album, length and album id).
+	Artist bool
 }
 
 // ReadCaps reads the firmware capabilities from path. A missing file gives all false.
@@ -66,6 +69,8 @@ func ReadCaps(path string) Caps {
 			caps.Signin = true
 		case "libsource":
 			caps.Libsource = true
+		case "artist":
+			caps.Artist = true
 		}
 	}
 	return caps

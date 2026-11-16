@@ -77,6 +77,8 @@ type nav struct {
 	cover            func(id string, w http.ResponseWriter, r *http.Request) // getCoverArt's answer; nil is a 64 px JPEG
 	noArtistID       bool                                                    // songs name no artistId
 	noAlbums         bool                                                    // getArtist lists no albums
+	explore          bool                                                    // albums name a genre and release types (exploreTypes), getArtist lists every album, getArtistInfo2 names similar artists
+	holdInfo         chan struct{}                                           // getArtistInfo2 waits for it
 	reqMu            sync.Mutex
 	reqN             map[string]int        // requests served, by endpoint
 	lastQ            map[string]url.Values // the latest request's query, by endpoint
@@ -120,8 +122,20 @@ func (n *nav) album(i int) map[string]any {
 	if n.art {
 		a["coverArt"] = a["id"]
 	}
+	if n.explore {
+		a["genre"] = exploreGenres[i%len(exploreGenres)]
+		if t := exploreTypes[i%len(exploreTypes)]; t != nil {
+			a["releaseTypes"] = t
+		}
+	}
 	return a
 }
+
+// With explore, album i's genre and release types are these, at i modulo their length.
+var (
+	exploreGenres = []string{"Electronic", "House", "Electronic", "", "House"}
+	exploreTypes  = [][]string{{"Album"}, {"Single"}, {"ep"}, {"album", "compilation"}, nil}
+)
 
 func (n *nav) playlist(k int) map[string]any {
 	name := "Mix"
@@ -278,7 +292,25 @@ func (n *nav) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ok("artist", map[string]any{"id": "ar1", "name": "Artist"})
 			return
 		}
-		ok("artist", map[string]any{"id": "ar1", "name": "Artist", "albumCount": 2, "album": []any{n.album(0), n.album(1)}})
+		als := []any{n.album(0), n.album(1)}
+		for i := 2; n.explore && i < n.albums; i++ {
+			als = append(als, n.album(i))
+		}
+		ok("artist", map[string]any{"id": "ar1", "name": "Artist", "albumCount": len(als), "album": als})
+	case "getArtistInfo2":
+		if n.holdInfo != nil {
+			select {
+			case <-n.holdInfo:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		if !n.explore {
+			http.NotFound(w, r)
+			return
+		}
+		ok("artistInfo2", map[string]any{"biography": "", "similarArtist": []any{
+			map[string]any{"id": "ar2", "name": "Duke Dumont", "albumCount": 3}, map[string]any{"name": "Not On The Server"}}})
 	case "getScanStatus":
 		ls, _ := n.lastScan.Load().(string)
 		if ls == "" {

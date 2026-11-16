@@ -172,14 +172,18 @@ func (v view) item(kind selection.Kind, id, name, own string, total int) q2spot.
 }
 
 func (v view) song(s subsonic.Song, listKey string, i int) q2spot.Row {
-	st := ""
-	if v.m.Songs[s.ID] != nil {
-		st = "On Q2"
-	} else if v.sel.Has(selection.KindSong, s.ID) {
-		st = "Waiting to sync"
-	}
-	return q2spot.Row{Kind: "action", URI: "play", Title: s.Title, Subtitle: join(s.Artist, st),
+	return q2spot.Row{Kind: "action", URI: "play", Title: s.Title, Subtitle: join(s.Artist, v.songStatus(s)),
 		Context: fmt.Sprintf("song:%s %s %d", s.ID, listKey, i), Position: "toggle"}
+}
+
+// songStatus is a song row's sync status: On Q2, Waiting to sync, or "".
+func (v view) songStatus(s subsonic.Song) string {
+	if v.m.Songs[s.ID] != nil {
+		return "On Q2"
+	} else if v.sel.Has(selection.KindSong, s.ID) {
+		return "Waiting to sync"
+	}
+	return ""
 }
 
 // syncNowRow is the shortcut to Sync, present while the card differs from the selection: a chosen
@@ -357,7 +361,8 @@ func (d *daemon) item(ctx context.Context, cl *subsonic.Client, kind selection.K
 }
 
 // itemPage is an artist's, album's or playlist's own page: Add/Remove, Quality, Play (an artist's:
-// Play, Shuffle, Radio, Top Songs), then its contents.
+// Play, Shuffle, Radio, Top Songs, and with the firmware's "artist" the rows of artistRows), then
+// its contents.
 func (d *daemon) itemPage(ctx context.Context, cl *subsonic.Client, arg, cursor string) q2spot.Reply {
 	kind, id := parseKey(arg)
 	key := selection.Key(kind, id)
@@ -389,15 +394,17 @@ func (d *daemon) itemPage(ctx context.Context, cl *subsonic.Client, arg, cursor 
 		rows = append(rows, v.song(s, key, i))
 	}
 	if len(albums) > 0 {
-		rows = append(rows, act("play", "Play", key+" 0"), act("shuffle", "Shuffle", key), act("radio", "Radio", key),
-			list("top", "Top Songs", "", key))
+		rows = append(rows, act("play", "Play", key+" 0"), act("shuffle", "Shuffle", key), act("radio", "Radio", key))
+		if kind == selection.KindArtist && d.caps.Artist {
+			var more []q2spot.Row
+			more, albums = d.artistRows(ctx, cl, id, albums)
+			rows = append(rows, more...)
+		} else {
+			rows = append(rows, list("top", "Top Songs", "", key))
+		}
 	}
 	for _, a := range albums {
-		year := ""
-		if a.Year > 0 {
-			year = strconv.Itoa(a.Year)
-		}
-		rows = append(rows, v.item(selection.KindAlbum, a.ID, a.Name, year, a.SongCount)) // no covers: art.go
+		rows = append(rows, v.item(selection.KindAlbum, a.ID, a.Name, year(a.Year), a.SongCount)) // no covers: art.go
 	}
 	if kind == selection.KindArtist && len(albums) == 0 { // Go to Artist on a guest or a compilation's track
 		rows = append(rows, info("No albums"))
@@ -665,9 +672,13 @@ func (d *daemon) quality(arg string) q2spot.Reply {
 	return q2spot.Reply{}
 }
 
-// play streams a list from an index ("<list key> index", after a song row's own "song:<id>").
+// play streams a list from an index ("<list key> index", after a song row's own "song:<id>"; an
+// "album:<id>" after them, listSong's, is not the play's).
 func (d *daemon) play(ctx context.Context, cl *subsonic.Client, arg string) q2spot.Reply {
 	f := strings.Fields(arg)
+	if len(f) == 4 && strings.HasPrefix(f[3], "album:") {
+		f = f[:3]
+	}
 	pressed := ""
 	if len(f) == 3 {
 		_, pressed = parseKey(f[0])
@@ -687,7 +698,7 @@ func (d *daemon) play(ctx context.Context, cl *subsonic.Client, arg string) q2sp
 		songs = it.songs
 	case selection.KindArtist:
 		return d.playArtist(ctx, cl, id, false)
-	case "starred", "top", "q":
+	case "starred", "top", "songs", "q":
 		// The list as last shown, when it still has the pressed song at that row: "q:" names no
 		// term, and the firmware asks a level again after every press and Back, so the list kept
 		// may be a newer answer than the one pressed in. Else the song alone. Starred has no

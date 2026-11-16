@@ -178,13 +178,7 @@ func (d *daemon) genres(ctx context.Context, cl *subsonic.Client, cursor string)
 func (d *daemon) top(ctx context.Context, cl *subsonic.Client, arg, cursor string) q2spot.Reply {
 	_, id := parseKey(arg)
 	key := "top:" + id
-	songs, err := cached(d, cl, key, func() ([]subsonic.Song, error) {
-		it, err := d.item(ctx, cl, selection.KindArtist, id)
-		if err != nil {
-			return nil, err
-		}
-		return cl.TopSongs(ctx, it.name, radioSongs)
-	})
+	songs, err := d.topSongs(ctx, cl, cl, id)
 	switch {
 	case subsonic.Unsupported(err):
 		return q2spot.Reply{Rows: []q2spot.Row{info(notHere)}}
@@ -199,12 +193,25 @@ func (d *daemon) top(ctx context.Context, cl *subsonic.Client, arg, cursor strin
 	v := d.view()
 	var rows []q2spot.Row
 	for i, s := range songs {
-		rows = append(rows, v.song(s, key, i))
+		rows = append(rows, v.listSong(s, key, i, d.caps.Artist))
 	}
 	if len(rows) == 0 {
 		rows = []q2spot.Row{info("No top songs")}
 	}
 	return d.page(rows, cursor)
+}
+
+// topSongs is an artist's Top Songs, kept under Top Songs' own key, so the artist's page that asked
+// first leaves them ready for it. call makes the request (cl, or cl within a time limit); cl is the
+// account's client, which the cache is kept by.
+func (d *daemon) topSongs(ctx context.Context, cl, call *subsonic.Client, id string) ([]subsonic.Song, error) {
+	return cached(d, cl, "top:"+id, func() ([]subsonic.Song, error) {
+		it, err := d.item(ctx, cl, selection.KindArtist, id)
+		if err != nil {
+			return nil, err
+		}
+		return call.TopSongs(ctx, it.name, radioSongs)
+	})
 }
 
 // playNow streams songs from the first, or says there is nothing.
