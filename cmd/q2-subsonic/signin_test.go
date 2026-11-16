@@ -505,6 +505,27 @@ func TestSigninQRLinkSkipsPIN(t *testing.T) {
 	}
 }
 
+// Before the PIN is taken the page shows only the PIN step: the server, user and password form is
+// hidden in the page as served, not by a style keyed to data-auth, and the script shows it only
+// once the PIN is taken (or the page came with the cookie).
+func TestSigninFormHiddenBeforePIN(t *testing.T) {
+	r := newRig(t)
+	resp, err := noRedirect().Get(r.base + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pg, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	for _, tag := range []string{`<form id="signstep" hidden`, `<section id="donestep" class="center" hidden`} {
+		if !strings.Contains(string(pg), tag) {
+			t.Errorf("the page before the PIN lacks %s", tag)
+		}
+	}
+	if !strings.Contains(string(pg), `if (document.body.dataset.auth === '1') signForm(); else { show('pinstep')`) {
+		t.Error("the script doesn't keep the form for a page with the cookie only")
+	}
+}
+
 // A sign-in sent without the PIN taken says to enter it, for the PIN step.
 func TestSigninNeedsPINFirst(t *testing.T) {
 	r := newRig(t)
