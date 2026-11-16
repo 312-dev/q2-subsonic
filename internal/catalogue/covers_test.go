@@ -26,7 +26,7 @@ func TestCoverAlbums(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []Album{{"a", "Alpha"}, {"b", "beta"}}; !slices.Equal(got, want) {
+	if want := []Album{{"a", "Alpha", ""}, {"b", "beta", ""}}; !slices.Equal(got, want) {
 		t.Fatalf("%v", got)
 	}
 }
@@ -40,7 +40,7 @@ func TestCoverPlanAndBudget(t *testing.T) {
 	os.WriteFile(c.Path("gone"), []byte("x"), 0o644)
 	os.WriteFile(c.Path("have"), []byte("x"), 0o644)
 	os.WriteFile(c.Path("half")+".tmp", []byte("x"), 0o644)
-	albums := []Album{{"have", ""}, {"a", ""}, {"none", ""}, {"b", ""}, {"c", ""}}
+	albums := []Album{{ID: "have"}, {ID: "a"}, {ID: "none"}, {ID: "b"}, {ID: "c"}}
 	p, err := c.Plan(albums)
 	if err != nil {
 		t.Fatal(err)
