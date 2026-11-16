@@ -544,7 +544,9 @@ func TestCleanServer(t *testing.T) {
 		{"https://example.com/navidrome/REST/getAlbum", "https://example.com/navidrome", ""},
 		{"https://example.com/restaurant", "https://example.com/restaurant", ""},
 		{"https://host.tail5d173a.ts.net:4533#x", "https://host.tail5d173a.ts.net:4533", ""},
-		{"http://192.168.1.5:4533", "", "only over https://"},
+		{"http://192.168.1.5:4533/rest/", "http://192.168.1.5:4533", ""},
+		{"http://music.example.com", "", "Plain http:// works only for an address on your home network"},
+		{"http://8.8.8.8:4533", "", "Plain http:// works only"},
 		{"", "", "Enter your server's address."},
 		{"ftp://x", "", "isn't a server address"},
 	} {
@@ -628,5 +630,127 @@ func TestSigninDoneAndRemembered(t *testing.T) {
 	resp, _ = noRedirect().Get(base + "/?k=" + key)
 	if pg, _ = io.ReadAll(resp.Body); strings.Contains(string(pg), `x"><script>`) {
 		t.Error("the last server isn't escaped")
+	}
+}
+
+func TestCleanHome(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"", ""},
+		{" 192.168.1.20:4533/ ", "http://192.168.1.20:4533"},
+		{"http://10.0.0.5:4533/rest/ping.view?u=a", "http://10.0.0.5:4533"},
+		{"https://172.20.1.1/music", "https://172.20.1.1/music"},
+		{"http://172.32.0.1", "refused"},
+		{"http://nas.local:4533", "refused"},
+		{"https://music.example.com", "refused"},
+		{"ftp://192.168.1.2", "refused"},
+	} {
+		got, bad := cleanHome(c.in)
+		if c.want == "refused" {
+			if bad == nil || bad.field != "home" || bad.msg != homeHint {
+				t.Errorf("%q: %q %+v, want refused", c.in, got, bad)
+			}
+		} else if got != c.want || bad != nil {
+			t.Errorf("%q: %q %+v, want %q", c.in, got, bad, c.want)
+		}
+	}
+}
+
+// The Q2 is on the home address's network when one of its interfaces' subnets holds it.
+func TestNearHome(t *testing.T) {
+	_, wifi, _ := net.ParseCIDR("192.168.1.37/24")
+	wifi.IP = net.IPv4(192, 168, 1, 37)
+	addrs := []net.Addr{wifi}
+	at := func() []net.Addr { return addrs }
+	if !nearHome("http://192.168.1.20:4533", at)() || nearHome("http://192.168.2.20:4533", at)() ||
+		nearHome("https://music.example.com", at)() {
+		t.Error("near")
+	}
+	addrs = nil // off Wi-Fi
+	if nearHome("http://192.168.1.20:4533", at)() {
+		t.Error("near with no interface")
+	}
+}
+
+// homeNet is a sign-in rig whose client sends 192.168.1.20:4533 to a plain-http fake server that
+// signs u in, and whose Q2 is on 192.168.1.0/24 while *on is true.
+func homeNet(t *testing.T, on *bool) func(*signin, *httptest.Server) {
+	return func(s *signin, nd *httptest.Server) {
+		home := httptest.NewServer(nd.Config.Handler)
+		t.Cleanup(home.Close)
+		tr := nd.Client().Transport.(*http.Transport).Clone()
+		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if addr == "192.168.1.20:4533" {
+				addr = home.Listener.Addr().String()
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		}
+		s.newClient = func(c subsonic.Creds) (*subsonic.Client, error) { return subsonic.New(c, &http.Client{Transport: tr}) }
+		s.addrs = func() []net.Addr {
+			if !*on {
+				return nil
+			}
+			return []net.Addr{&net.IPNet{IP: net.IPv4(192, 168, 1, 37), Mask: net.CIDRMask(24, 32)}}
+		}
+	}
+}
+
+// A home address is checked there when the Q2 is on its network, so a sign-in at home works though
+// the public address can't be reached from inside; it is kept in settings.json, not the
+// credentials, and fills the next form. Away, the public address is asked.
+func TestSigninHomeAddress(t *testing.T) {
+	on := true
+	r := newRig(t, homeNet(t, &on))
+	_, body := r.post(t, "/api/signin", `{"server":"https://127.0.0.1:1","home":"192.168.1.20:4533","user":"u","password":"pw"}`, true, r.login(t))
+	if !strings.Contains(body, `"ok":true`) {
+		t.Fatalf("at home: %s", body)
+	}
+	if st := loadSettings(r.dir); st.Home != "http://192.168.1.20:4533" {
+		t.Errorf("settings home %q", st.Home)
+	}
+	if b, _ := os.ReadFile(filepath.Join(r.dir, "credentials")); strings.Contains(string(b), "192.168") {
+		t.Errorf("home address in the credentials: %s", b)
+	}
+	eventually(t, "the stop", func() bool { return !r.s.active() })
+	r.s.start(0)
+	r.s.mu.Lock()
+	base, key := "http://"+r.s.ln.Addr().String(), r.s.key
+	r.s.mu.Unlock()
+	resp, err := noRedirect().Get(base + "/?k=" + key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pg, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(pg), `data-home="http://192.168.1.20:4533"`) {
+		t.Error("the form isn't filled with the home address")
+	}
+	r.base = base
+	if _, body := r.post(t, "/api/login", `{"pin":"`+r.s.pin+`"}`, true, nil); !strings.Contains(body, `"home":"http://192.168.1.20:4533"`) {
+		t.Errorf("the PIN's answer lacks the home address: %s", body)
+	}
+
+	on = false // away: the unreachable public address is what is asked
+	r2 := newRig(t, homeNet(t, &on))
+	_, body = r2.post(t, "/api/signin", `{"server":"https://127.0.0.1:1","home":"192.168.1.20:4533","user":"u","password":"pw"}`, true, r2.login(t))
+	if strings.Contains(body, `"ok":true`) || !strings.Contains(body, `"field":"server"`) {
+		t.Fatalf("away: %s", body)
+	}
+}
+
+// A home address that isn't a private address is refused under its own field, before the server
+// is asked; a sign-in without one clears the one kept.
+func TestSigninHomeAddressRefused(t *testing.T) {
+	on := true
+	r := newRig(t, homeNet(t, &on))
+	_, body := r.post(t, "/api/signin", `{"server":"`+r.nd.URL+`","home":"http://music.example.com","user":"u","password":"pw"}`, true, r.login(t))
+	if strings.Contains(body, `"ok":true`) || !strings.Contains(body, `"field":"home"`) {
+		t.Fatalf("%s", body)
+	}
+	if _, ok := creds.Load(r.dir); ok {
+		t.Fatal("signed in with a refused home address")
+	}
+	storeSettings(r.dir, settings{Home: "http://192.168.1.20:4533", NoReport: true})
+	_, body = r.post(t, "/api/signin", `{"server":"`+r.nd.URL+`","user":"u","password":"pw"}`, true, r.login(t))
+	if st := loadSettings(r.dir); !strings.Contains(body, `"ok":true`) || st.Home != "" || !st.NoReport {
+		t.Fatalf("%s: settings %+v", body, st)
 	}
 }

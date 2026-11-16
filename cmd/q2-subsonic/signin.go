@@ -68,6 +68,7 @@ type signin struct {
 	tick      time.Duration                                            // how often the 10 min limit is checked; default 1 s
 	newClient func(subsonic.Creds) (*subsonic.Client, error)           // default: the embedded roots
 	lookup    func(ctx context.Context, host string) ([]net.IP, error) // default net.DefaultResolver's
+	addrs     func() []net.Addr                                        // the Q2's interfaces' addresses (home.go); nil is localAddrs
 
 	mu       sync.Mutex
 	ln       net.Listener
@@ -304,6 +305,9 @@ func (s *signin) index(w http.ResponseWriter, r *http.Request) {
 		if last := s.lastServer(); last != "" {
 			page = bytes.Replace(page, []byte(`data-server=""`), []byte(`data-server="`+html.EscapeString(last)+`"`), 1)
 		}
+		if h := loadSettings(s.dir).Home; h != "" {
+			page = bytes.Replace(page, []byte(`data-home=""`), []byte(`data-home="`+html.EscapeString(h)+`"`), 1)
+		}
 	} else {
 		code, page = max(code, http.StatusUnauthorized), bytes.Replace(signinHTML, []byte(`data-auth="1"`), []byte(`data-auth="0"`), 1)
 	}
@@ -344,18 +348,22 @@ func (s *signin) login(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.setCookie(w)
 		s.opened()
-		reply(w, http.StatusOK, map[string]any{"ok": true, "server": s.lastServer()}) // the form's, as index fills it
+		reply(w, http.StatusOK, map[string]any{"ok": true, "server": s.lastServer(), "home": loadSettings(s.dir).Home}) // the form's, as index fills it
 	}
 }
 
 // signinRefused is a sign-in the phone can't send: field names the input it concerns ("pin",
-// "server", or "" for the user name and password), where the page shows it.
+// "server", "home", or "" for the user name and password), where the page shows it.
 type signinRefused struct{ field, msg string }
+
+// httpHint is the words for an http:// server address that isn't on the home network.
+const httpHint = "Use your server's https:// address. Plain http:// works only for an address on your home network (10.x, 172.16 to 172.31, or 192.168.x), so your password never crosses the internet unencrypted."
 
 // cleanServer is the server address as the phone typed or pasted it, tidied: https:// added when it
 // has no scheme, an API path copied with it (/rest/ping.view?…) cut off, and the trailing slash.
-// http:// is refused: the password would cross the network unencrypted, and subsonic.New refuses it
-// anyway. The words never echo the address, which may hold a user:password@.
+// http:// is refused unless the host is a private IPv4 address (subsonic.Private): elsewhere the
+// sign-in would cross the internet unencrypted, and subsonic.New refuses it anyway. The words never
+// echo the address, which may hold a user:password@.
 func cleanServer(raw string) (string, *signinRefused) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -368,15 +376,20 @@ func cleanServer(raw string) (string, *signinRefused) {
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
 		return "", &signinRefused{"server", "That isn't a server address. It looks like https://music.example.com"}
 	}
-	if u.Scheme == "http" {
-		return "", &signinRefused{"server", "The Q2 signs in only over https://, so your password never crosses the network unencrypted. Use your server's https:// address."}
+	if u.Scheme == "http" && !subsonic.Private(u.Hostname()) {
+		return "", &signinRefused{"server", httpHint}
 	}
+	return tidy(u), nil
+}
+
+// tidy cuts an API path (/rest/…), the query, the fragment and the trailing slash off u.
+func tidy(u *url.URL) string {
 	p := u.Path
 	if i := strings.Index(strings.ToLower(p+"/"), "/rest/"); i >= 0 {
 		p = p[:i]
 	}
 	u.Path, u.RawPath, u.RawQuery, u.Fragment, u.ForceQuery = strings.TrimRight(p, "/"), "", "", "", false
-	return u.String(), nil
+	return u.String()
 }
 
 // tailnet is whether host is a Tailscale address: a MagicDNS name (*.ts.net) or one in Tailscale's
@@ -450,7 +463,7 @@ func (s *signin) signin(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusUnauthorized, map[string]string{"error": msg, "field": "pin"})
 		return
 	}
-	var body struct{ Server, User, Password string }
+	var body struct{ Server, Home, User, Password string }
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body) != nil {
 		refuse(w, http.StatusBadRequest, "bad body")
 		return
@@ -459,6 +472,9 @@ func (s *signin) signin(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusOK, map[string]any{"ok": ok, "message": msg, "field": field})
 	}
 	server, bad := cleanServer(body.Server)
+	if bad == nil {
+		body.Home, bad = cleanHome(body.Home)
+	}
 	if bad != nil {
 		answer(false, bad.field, bad.msg)
 		return
@@ -496,6 +512,9 @@ func (s *signin) signin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cl, err := mk(c)
+	if err == nil && body.Home != "" { // at home the check goes there first, as the app's requests will
+		err = cl.Home(body.Home, nearHome(body.Home, s.addrs))
+	}
 	if err == nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()
@@ -508,6 +527,15 @@ func (s *signin) signin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := creds.Save(s.dir, c); err != nil {
 		fin(stepError, "", "Couldn't save the sign-in", "Couldn't save the sign-in", "Couldn't Sign In", "Couldn't save the sign-in")
+		return
+	}
+	settingsMu.Lock() // the home address goes with the settings, not the sign-in; "" clears it
+	st := loadSettings(s.dir)
+	st.Home = body.Home
+	err = storeSettings(s.dir, st)
+	settingsMu.Unlock()
+	if err != nil {
+		fin(stepError, "", "Couldn't save the home address", "Couldn't save the home address", "Couldn't Sign In", "Couldn't save the home address")
 		return
 	}
 	u.User = nil // the form's next address: never a password

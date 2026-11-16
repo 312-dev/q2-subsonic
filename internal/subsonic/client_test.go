@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -846,5 +848,106 @@ func TestLogRedactsCredentials(t *testing.T) {
 		if !strings.Contains(string(b), kept) {
 			t.Fatalf("no %s in\n%s", kept, b)
 		}
+	}
+}
+
+// Plain http:// is allowed only to a private (RFC 1918) IPv4 address, for a server on the home
+// network; a name is refused even if it would resolve there.
+func TestHTTPOnlyPrivate(t *testing.T) {
+	for host, ok := range map[string]bool{"10.1.2.3": true, "172.16.0.1": true, "172.31.255.254": true,
+		"192.168.1.20": true, "172.32.0.1": false, "172.15.0.1": false, "8.8.8.8": false, "100.64.1.1": false,
+		"127.0.0.1": false, "nas.local": false, "fd00::1": false} {
+		_, err := New(Creds{Server: "http://" + net.JoinHostPort(host, "4533")}, http.DefaultClient)
+		if (err == nil) != ok || (!ok && !errors.Is(err, ErrInsecure)) {
+			t.Errorf("http://%s: %v", host, err)
+		}
+	}
+}
+
+// homeRig is a main server (https) and a home one (plain http at 192.168.1.20:4533, which the
+// client's dialer sends to a local listener), each counting the pings it answers.
+func homeRig(t *testing.T) (c *Client, main, home *httptest.Server, hits map[string]int, mu *sync.Mutex) {
+	t.Helper()
+	hits, mu = map[string]int{}, &sync.Mutex{}
+	answer := func(name string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			hits[name]++
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"subsonic-response":{"status":"ok","version":"1.16.1"}}`))
+		}
+	}
+	main = httptest.NewTLSServer(answer("main"))
+	home = httptest.NewServer(answer("home"))
+	t.Cleanup(main.Close)
+	t.Cleanup(home.Close)
+	tr := main.Client().Transport.(*http.Transport).Clone()
+	homeAddr := home.Listener.Addr().String()
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if addr == "192.168.1.20:4533" {
+			addr = homeAddr
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	}
+	c, err := New(Creds{Server: main.URL, User: "u", Password: "pw"}, &http.Client{Transport: tr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, main, home, hits, mu
+}
+
+// With a home address the client asks it while the Q2 is on its network, and the main address
+// otherwise; a home address that doesn't answer sends the request, and the next minute's, to the
+// main one.
+func TestHomeAddressFirst(t *testing.T) {
+	c, _, home, hits, mu := homeRig(t)
+	near := true
+	if err := c.Home("http://192.168.1.20:4533", func() bool { return near }); err != nil {
+		t.Fatal(err)
+	}
+	count := func() (int, int) { mu.Lock(); defer mu.Unlock(); return hits["home"], hits["main"] }
+	if err := c.Ping(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h, m := count(); h != 1 || m != 0 {
+		t.Fatalf("on the home network: home %d main %d", h, m)
+	}
+	if !strings.HasPrefix(c.CoverURL("x"), "http://192.168.1.20:4533/rest/") {
+		t.Errorf("cover URL at home: %s", c.CoverURL("x"))
+	}
+	near = false
+	c.Ping(context.Background())
+	if h, m := count(); h != 1 || m != 1 {
+		t.Fatalf("away: home %d main %d", h, m)
+	}
+	near = true
+	home.Close()
+	if err := c.Ping(context.Background()); err != nil {
+		t.Fatalf("home down: %v", err)
+	}
+	if _, m := count(); m != 2 || c.AtHome() {
+		t.Fatalf("home down: main %d, at home %v", m, c.AtHome())
+	}
+	if !strings.HasPrefix(c.CoverURL("x"), strings.TrimRight(c.base.String(), "/")+"/rest/") {
+		t.Errorf("cover URL while home rests: %s", c.CoverURL("x"))
+	}
+	c.home.rest.Store(0) // the minute is up
+	if !c.AtHome() {
+		t.Error("home not tried again after its rest")
+	}
+}
+
+// A home address is https or http to a private address, as the main one; the main address itself
+// sets none, so a failing request is not sent to the same place again.
+func TestHomeAddressChecked(t *testing.T) {
+	c, main, _, _, _ := homeRig(t)
+	for _, bad := range []string{"http://nas.local:4533", "http://8.8.8.8", ""} {
+		if err := c.Home(bad, func() bool { return true }); err == nil {
+			t.Errorf("%q taken", bad)
+		}
+	}
+	if err := c.Home(main.URL, func() bool { return true }); err != nil || c.home != nil {
+		t.Errorf("main as home: %v %v", err, c.home)
 	}
 }

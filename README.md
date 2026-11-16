@@ -1,6 +1,6 @@
 # q2-subsonic
 
-A Subsonic client for the **Shanling Q2** running [Q2 Pod](https://github.com/DiamondBond/q2-pod). Pick playlists, albums, artists and songs on the Q2, and it syncs them to the card over Wi-Fi, or streams a song straight from your server. It needs a Q2 Pod build that supports card apps, and a Subsonic or OpenSubsonic server (Navidrome, for one) reachable over HTTPS.
+A Subsonic client for the **Shanling Q2** running [Q2 Pod](https://github.com/DiamondBond/q2-pod). Pick playlists, albums, artists and songs on the Q2, and it syncs them to the card over Wi-Fi, or streams a song straight from your server. It needs a Q2 Pod build that supports card apps, and a Subsonic or OpenSubsonic server (Navidrome, for one) reachable over HTTPS, or over plain HTTP on your home network.
 
 ## Install
 
@@ -18,7 +18,7 @@ A Subsonic client for the **Shanling Q2** running [Q2 Pod](https://github.com/Di
 ## Sign in
 
 1. Open **Streaming → Subsonic**. While signed out, the only row is **Sign In from Your Phone**.
-2. Press it. The Q2 shows a QR code, and under it the page's address and a PIN. Scan the code with your phone on the same Wi-Fi and the form opens straight away; if you type the address instead, the page asks for the PIN first. Fill in the server address, user name and password. A server address pasted with its API path (`/rest/…`) is cut back to the server's. (On Q2 Pod without the `signin` extension, press the row a second time to open the QR page.)
+2. Press it. The Q2 shows a QR code, and under it the page's address and a PIN. Scan the code with your phone on the same Wi-Fi and the form opens straight away; if you type the address instead, the page asks for the PIN first. Fill in the server address, user name and password. A server address pasted with its API path (`/rest/…`) is cut back to the server's. **At Home** is optional: see [Home address](#home-address). (On Q2 Pod without the `signin` extension, press the row a second time to open the QR page.)
 3. The Q2 follows along: **Continue on Your Phone**, **Signing In…**, then **Signed In** and the list opens. If it fails, the phone says why under the field it concerns, and the Q2 and the row say so too. The next sign-in fills in the last server you signed in to.
 
 Things to know:
@@ -26,9 +26,14 @@ Things to know:
 - The sign-in page runs only after you press **Sign In from Your Phone**, and stops when you are signed in, when you leave the QR page, or after 10 minutes. The screen turning off doesn't stop it. Until you press it, the app opens no port.
 - A server only on Tailscale (a `*.ts.net` name or a `100.64.0.0/10` address) can't be reached from the Q2: use its public address.
 - The password crosses your local Wi-Fi unencrypted, once, from the phone to the Q2. Do it on a network you trust.
-- The server must be `https://`; `http://` is refused. Certificates are verified.
+- The server must be `https://`, unless it is on your home network: `http://` works only for a private address (`10.x`, `172.16` to `172.31`, `192.168.x`, typed as the address, not a name) and is refused anywhere else. Certificates are verified.
 - The password is stored on the card, in `.subsonic/credentials`. If your server offers OpenSubsonic API keys (`apiKeyAuthentication`), enter a key from its settings as the password instead: then only the key is stored. exFAT has no file permissions, so anyone with the card can read it. **Make a server user just for the Q2, not an admin.** If the card is lost, delete that user on the server and the card is worthless.
+- **Settings → Account** shows the server, the home address when there is one, and the user.
 - **Settings → Account → Sign Out** removes the stored login and empties the Stream Cache, but for a list that is still playing. Your synced music stays on the card.
+
+### Home address
+
+If your server is at home, fill in **At Home** on the sign-in page with its address on your home network, such as `http://192.168.1.20:4533` (`http://` is added when you type no scheme). Whenever the Q2's Wi-Fi is on that address's subnet (from the Q2's own address and mask), the app asks the server there first; anywhere else it uses the server address above. If the home address doesn't answer, the request goes to the server address, and so does every request for the next minute. It must be a private address (`10.x`, `172.16` to `172.31`, `192.168.x`); anything else is refused under the field. It is kept in `.subsonic/settings.json` with the other settings, not with the login, and a sign-in with the field empty clears it.
 
 ## Use
 

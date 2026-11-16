@@ -686,6 +686,13 @@ func (d *daemon) account(cl *subsonic.Client) q2spot.Reply {
 	if cl.KeyAuth() {
 		stored = "Only an API key is stored on this card"
 	}
-	return q2spot.Reply{Rows: []q2spot.Row{info(server), info(user), info(stored),
-		info("Tip: use a server user just for the Q2"), act("signout", "Sign Out", "")}}
+	rows := []q2spot.Row{info(server)}
+	if h := d.settings().Home; h != "" { // the address asked first on the home network (home.go)
+		if u, err := url.Parse(h); err == nil {
+			u.User = nil
+			rows = append(rows, info("At home: "+u.String()))
+		}
+	}
+	return q2spot.Reply{Rows: append(rows, info(user), info(stored),
+		info("Tip: use a server user just for the Q2"), act("signout", "Sign Out", ""))}
 }

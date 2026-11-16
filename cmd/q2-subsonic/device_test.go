@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1444,6 +1445,25 @@ func TestAccountHidesServerPassword(t *testing.T) {
 		if strings.Contains(row.Title+row.Subtitle, "proxySecret42") {
 			t.Fatalf("password on screen: %+v", row)
 		}
+	}
+}
+
+// The home address in settings.json is asked while the Q2 is on its subnet, and Account names it.
+func TestClientHomeAddress(t *testing.T) {
+	d := newTestDaemon(t, &nav{}, "", true)
+	var addrs []net.Addr
+	d.addrs = func() []net.Addr { return addrs }
+	d.saveSettings(settings{Home: "http://192.168.1.20:4533"})
+	cl := d.client()
+	if cl == nil || cl.AtHome() {
+		t.Fatalf("off the home network: %v", cl)
+	}
+	addrs = []net.Addr{&net.IPNet{IP: net.IPv4(192, 168, 1, 37), Mask: net.CIDRMask(24, 32)}}
+	if !cl.AtHome() || !strings.HasPrefix(cl.CoverURL("x"), "http://192.168.1.20:4533/rest/") {
+		t.Fatal("on the home network the home address isn't asked")
+	}
+	if _, ok := find(d.do("account"), "At home: http://192.168.1.20:4533"); !ok {
+		t.Errorf("account: %q", titles(d.do("account")))
 	}
 }
 

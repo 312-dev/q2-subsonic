@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -42,13 +43,14 @@ const (
 var errSignedOut = errors.New("signed out")
 
 // settings is .subsonic/settings.json. StreamQuality "" follows DefaultQuality. NoReport turns Report Plays off. StreamCacheMB is the stream
-// cache's limit: 0 is 2 GB, -1 Off.
+// cache's limit: 0 is 2 GB, -1 Off. Home is the server's home address (home.go), set by the phone sign-in.
 type settings struct {
 	DefaultQuality string `json:"defaultQuality,omitempty"`
 	StreamQuality  string `json:"streamQuality,omitempty"`
 	NoReport       bool   `json:"noReport,omitempty"`
 	StreamCacheMB  int    `json:"streamCacheMB,omitempty"`
 	Library        bool   `json:"library,omitempty"` // Show in Library (catalogue.go)
+	Home           string `json:"home,omitempty"`
 }
 
 // cacheSizes are Stream Cache's steps in MB, the firmware's Spotify Cache sizes, and Off.
@@ -221,6 +223,7 @@ type daemon struct {
 	art            *artCache
 	newClient      func(subsonic.Creds) (*subsonic.Client, error)
 	free           func(path string) int64
+	addrs          func() []net.Addr // the Q2's interfaces' addresses for the home address (home.go); nil is localAddrs
 	answerIn       time.Duration
 	signinPort     int
 
@@ -283,7 +286,12 @@ func newDaemon(dir, card, tmp string) *daemon {
 		},
 		free: freeBytes, answerIn: answerIn, signinPort: signinPort, browseTTL: browseTTL,
 		lastReq: time.Now(), resolved: map[string][]subsonic.Song{}, artistAlbums: map[string][]subsonic.Album{}}
-	d.signin = &signin{dir: dir, state: d.state, newClient: func(c subsonic.Creds) (*subsonic.Client, error) {
+	d.signin = &signin{dir: dir, state: d.state, addrs: func() []net.Addr {
+		if d.addrs != nil {
+			return d.addrs()
+		}
+		return localAddrs()
+	}, newClient: func(c subsonic.Creds) (*subsonic.Client, error) {
 		cl, err := d.newClient(c)
 		if cl != nil {
 			cl.Log = lg // the sign-in ping goes in log.txt too, redacted
@@ -382,6 +390,11 @@ func (d *daemon) client() *subsonic.Client {
 		return nil
 	}
 	cl.Log = d.log
+	if h := loadSettings(d.dir).Home; h != "" {
+		if err := cl.Home(h, nearHome(h, d.addrs)); err != nil {
+			d.log.Printf("home address: %v", err) // settings.json edited by hand: the main address only
+		}
+	}
 	d.cl, d.server, d.user, d.host = cl, c.Server, c.User, c.Server
 	if u, err := url.Parse(c.Server); err == nil && u.Hostname() != "" {
 		d.host = u.Hostname()
@@ -535,17 +548,21 @@ func damagedSelection() q2spot.Reply {
 
 const selDamaged = "Selection file is damaged: reset it in On This Q2"
 
-func (d *daemon) settings() settings {
+func (d *daemon) settings() settings { return loadSettings(d.dir) }
+
+func (d *daemon) saveSettings(s settings) error { return storeSettings(d.dir, s) }
+
+func loadSettings(dir string) settings {
 	var s settings
-	if b, err := os.ReadFile(filepath.Join(d.dir, "settings.json")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(dir, "settings.json")); err == nil {
 		json.Unmarshal(b, &s)
 	}
 	return s
 }
 
-func (d *daemon) saveSettings(s settings) error {
+func storeSettings(dir string, s settings) error {
 	b, _ := json.Marshal(s)
-	return q2.WriteFile(filepath.Join(d.dir, "settings.json"), b)
+	return q2.WriteFile(filepath.Join(dir, "settings.json"), b)
 }
 
 // tick keeps the state file's hold=1 while files move (a sync, a stream fetching, a Server Library

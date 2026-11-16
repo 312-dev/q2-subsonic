@@ -119,7 +119,7 @@ func Message(err error, host string) string {
 	case errors.Is(err, ErrUnreachable):
 		return "Can't reach " + host
 	case errors.Is(err, ErrInsecure):
-		return "HTTPS is required. Use an https:// address"
+		return "HTTPS is required outside your home network. Use an https:// address"
 	}
 	var ae *APIError
 	if errors.As(err, &ae) && ae.Msg != "" {

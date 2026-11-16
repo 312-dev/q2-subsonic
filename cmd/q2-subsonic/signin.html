@@ -38,7 +38,7 @@ button:disabled { opacity: .45; cursor: default; }
 [hidden] { display: none !important; }
 </style>
 </head>
-<body data-auth="1" data-server="">
+<body data-auth="1" data-server="" data-home="">
 <main>
   <section id="pinstep" hidden>
     <h1>Enter PIN</h1>
@@ -54,7 +54,11 @@ button:disabled { opacity: .45; cursor: default; }
     <div class="group"><div class="f"><label for="server">Server</label>
       <input id="server" type="url" inputmode="url" placeholder="https://music.example.com" autocapitalize="off" autocorrect="off" spellcheck="false"></div></div>
     <p class="err" id="servererr" role="alert"></p>
-    <p class="foot">Your Subsonic server's address. It must start with https://</p>
+    <p class="foot">Your Subsonic server's address. It must start with https://, unless it is on your home network: http:// works only for a 10.x, 172.16 to 172.31, or 192.168.x address.</p>
+    <div class="group"><div class="f"><label for="home">At Home</label>
+      <input id="home" type="url" inputmode="url" placeholder="Optional: http://192.168.1.20:4533" autocapitalize="off" autocorrect="off" spellcheck="false"></div></div>
+    <p class="err" id="homeerr" role="alert"></p>
+    <p class="foot">Optional. Your server's address on your home Wi-Fi. When the Q2 is on that network it asks there first, and uses the address above everywhere else.</p>
     <div class="group">
       <div class="f"><label for="user">Username</label>
         <input id="user" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="username"></div>
@@ -101,7 +105,11 @@ pin.addEventListener('input', async () => {
   err('pinerr');
   let r;
   try { r = await post('/api/login', { pin: pin.value }); } catch (_) { err('pinerr', closed); return; }
-  if (r.status === 200) { if (r.body.server) document.body.dataset.server = r.body.server; signForm(); return; }
+  if (r.status === 200) {
+    if (r.body.server) document.body.dataset.server = r.body.server;
+    if (r.body.home) document.body.dataset.home = r.body.home;
+    signForm(); return;
+  }
   err('pinerr', r.body.error || "That isn't the PIN on the Q2's screen.");
   pin.value = ''; paint();
 });
@@ -110,39 +118,49 @@ function signForm() {
   show('signstep');
   const s = $('server');
   if (!s.value) s.value = document.body.dataset.server || '';
+  if (!$('home').value) $('home').value = document.body.dataset.home || '';
   (s.value ? $('user') : s).focus();
 }
 
-// What the Q2 does with the address too (signin.go cleanServer): https:// added when no scheme is
-// typed, an API path pasted with it cut off. http:// is refused here, before a password is sent.
-function clean(v) {
+// What the Q2 does with the addresses too (signin.go cleanServer, home.go cleanHome): a scheme
+// added when none is typed (https:// for the server, http:// at home), an API path pasted with it
+// cut off. http:// to anything but a private address is refused here, before a password is sent.
+function clean(v, scheme) {
   v = v.trim();
-  if (v && !/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) v = 'https://' + v;
+  if (v && !/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) v = scheme + v;
   return v.replace(/[?#].*$/, '').replace(/\/rest(\/.*)?$/i, '').replace(/\/+$/, '');
 }
+// A private IPv4 address (10/8, 172.16/12, 192.168/16) as the host of address v (subsonic.Private).
+function lan(v) {
+  const m = /^[a-z]+:\/\/(?:[^@\/]*@)?([0-9.]+)(?::\d+)?(?:\/|$)/i.exec(v);
+  if (!m) return false;
+  const o = m[1].split('.').map(Number);
+  if (o.length !== 4 || o.some(n => !(n >= 0 && n <= 255)) || m[1].split('.').some(p => p === '')) return false;
+  return o[0] === 10 || (o[0] === 172 && o[1] >= 16 && o[1] <= 31) || (o[0] === 192 && o[1] === 168);
+}
+const httpHint = "Use your server's https:// address. Plain http:// works only for an address on your home network (10.x, 172.16 to 172.31, or 192.168.x), so your password never crosses the internet unencrypted.";
+const homeHint = 'Use the server\'s address on your home network, such as http://192.168.1.20:4533. It must be a 10.x, 172.16 to 172.31, or 192.168.x address.';
 
 $('signstep').onsubmit = async e => {
   e.preventDefault();
-  err('servererr'); err('usererr');
-  const server = clean($('server').value);
-  $('server').value = server;
+  err('servererr'); err('homeerr'); err('usererr');
+  const server = clean($('server').value, 'https://'), home = clean($('home').value, 'http://');
+  $('server').value = server; $('home').value = home;
   if (!server) { err('servererr', "Enter your server's address."); $('server').focus(); return; }
-  if (/^http:\/\//i.test(server)) {
-    err('servererr', "The Q2 signs in only over https://, so your password never crosses the network unencrypted. Use your server's https:// address.");
-    $('server').focus(); return;
-  }
+  if (/^http:\/\//i.test(server) && !lan(server)) { err('servererr', httpHint); $('server').focus(); return; }
+  if (home && !lan(home)) { err('homeerr', homeHint); $('home').focus(); return; }
   if (!$('user').value.trim()) { err('usererr', 'Enter your username.'); $('user').focus(); return; }
   if (!$('password').value) { err('usererr', 'Enter your password or API key.'); $('password').focus(); return; }
   const b = $('go'); b.disabled = true; b.textContent = 'Signing In…';
   let r;
   try {
-    r = await post('/api/signin', { server, user: $('user').value.trim(), password: $('password').value });
+    r = await post('/api/signin', { server, home, user: $('user').value.trim(), password: $('password').value });
   } catch (_) { r = { status: 0, body: { error: closed } }; }
   b.disabled = false; b.textContent = 'Try Again';
   if (r.status === 200 && r.body.ok) { $('password').value = ''; show('donestep'); return; }
   const why = r.body.message || r.body.error || closed;
   if (r.body.field === 'pin') { pin.value = ''; paint(); show('pinstep'); err('pinerr', why); pin.focus(); return; }
-  err(r.body.field === 'server' ? 'servererr' : 'usererr', why);
+  err({ server: 'servererr', home: 'homeerr' }[r.body.field] || 'usererr', why);
 };
 
 if (document.body.dataset.auth === '1') signForm(); else { show('pinstep'); pin.focus(); paint(); }

@@ -1,4 +1,5 @@
-// Package subsonic is a small OpenSubsonic client (Navidrome) using token auth over HTTPS only.
+// Package subsonic is a small OpenSubsonic client (Navidrome) using token auth over HTTPS, or over
+// plain HTTP to a home network's private address only.
 package subsonic
 
 import (
@@ -15,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -36,6 +38,7 @@ type Creds struct {
 type Client struct {
 	c    Creds
 	base *url.URL
+	home *home // the server's address on the home network, tried first there; nil without one
 	hc   *http.Client
 	// Log, when set, receives one redacted line per request.
 	Log  *applog.Log
@@ -52,19 +55,40 @@ func (c *Client) Within(d time.Duration) *Client {
 	return &k
 }
 
-// New refuses anything but an https server address.
-func New(c Creds, hc *http.Client) (*Client, error) {
-	u, err := url.Parse(strings.TrimRight(strings.TrimSpace(c.Server), "/"))
+// Private is whether host is an IPv4 address in a private range (RFC 1918: 10.0.0.0/8,
+// 172.16.0.0/12, 192.168.0.0/16), the only place plain http:// is allowed. A name is not, even one
+// that resolves there: what it resolves to can change.
+func Private(host string) bool {
+	ip := net.ParseIP(host).To4()
+	return ip != nil && ip.IsPrivate()
+}
+
+// secure is whether u may carry a sign-in: https, or http to a private address.
+func secure(u *url.URL) bool {
+	return u.Scheme == "https" || (u.Scheme == "http" && Private(u.Hostname()))
+}
+
+func parseServer(s string) (*url.URL, error) {
+	u, err := url.Parse(strings.TrimRight(strings.TrimSpace(s), "/"))
 	if err != nil || u.Host == "" {
 		return nil, &APIError{Op: "new", Msg: "bad server address", kind: ErrUnreachable}
 	}
-	if u.Scheme != "https" {
+	if !secure(u) {
 		return nil, ErrInsecure
+	}
+	return u, nil
+}
+
+// New refuses a server address that is neither https nor http to a private address.
+func New(c Creds, hc *http.Client) (*Client, error) {
+	u, err := parseServer(c.Server)
+	if err != nil {
+		return nil, err
 	}
 	h := *hc
 	h.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		req.Header.Del("Referer") // Go sets it to the last URL, token and salt included
-		if req.URL.Scheme != "https" {
+		if !secure(req.URL) {
 			return ErrInsecure
 		}
 		if len(via) >= 10 {
@@ -73,6 +97,38 @@ func New(c Creds, hc *http.Client) (*Client, error) {
 		return nil
 	}
 	return &Client{c: c, base: u, hc: &h}, nil
+}
+
+// homeRest is how long requests go to the main address after one to the home address failed.
+const homeRest = time.Minute
+
+// home is the server's address on the home network, which the client asks first while near says
+// the Q2 is on that network, and leaves for homeRest after it fails to answer.
+type home struct {
+	base *url.URL
+	near func() bool
+	rest atomic.Int64 // UnixNano until which the main address is used
+}
+
+// Home has the client ask the server at addr (https, or http to a private address) while near
+// reports the Q2 on its network, and its main address otherwise or when addr doesn't answer. Set
+// it before the client is used. The main address itself as addr sets none.
+func (c *Client) Home(addr string, near func() bool) error {
+	u, err := parseServer(addr)
+	if err != nil {
+		return err
+	}
+	c.home = nil
+	if u.String() != c.base.String() {
+		c.home = &home{base: u, near: near}
+	}
+	return nil
+}
+
+// AtHome is whether requests go to the home address now.
+func (c *Client) AtHome() bool {
+	h := c.home
+	return h != nil && time.Now().UnixNano() >= h.rest.Load() && h.near()
 }
 
 // auth returns the query values common to every request: the API key, or a token with a fresh salt
@@ -103,6 +159,9 @@ func (c *Client) endpoint(op string, q url.Values) string {
 		v[k] = vs
 	}
 	u := *c.base
+	if c.AtHome() {
+		u = *c.home.base
+	}
 	u.Path = strings.TrimRight(u.Path, "/") + "/rest/" + op
 	u.RawQuery = v.Encode()
 	return u.String()
@@ -123,9 +182,10 @@ const (
 
 // do sends one GET for u, from byte from when from > 0, and logs it redacted. Its body fails with
 // ErrUnreachable once one Read waits longer than the idle time, so a stalled server can't hang a
-// download; time between Reads (a consumer yielding to a stream) doesn't count.
-func (c *Client) do(ctx context.Context, op, u string, from int64) (*http.Response, error) {
-	ctx, cancel := context.WithCancel(ctx)
+// download; time between Reads (a consumer yielding to a stream) doesn't count. A request to the
+// home address that gets no answer is sent to the main address, which takes the next minute's too.
+func (c *Client) do(parent context.Context, op, u string, from int64) (*http.Response, error) {
+	ctx, cancel := context.WithCancel(parent)
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		cancel()
@@ -136,8 +196,13 @@ func (c *Client) do(ctx context.Context, op, u string, from int64) (*http.Respon
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
+		live := ctx.Err() == nil // not cancelled by the caller
 		cancel()
 		c.logf("GET %s -> %v", u, err)
+		if main, ok := c.offHome(u); ok && live {
+			c.home.rest.Store(time.Now().Add(homeRest).UnixNano())
+			return c.do(parent, op, main, from)
+		}
 		return nil, &APIError{Op: op, Msg: applog.Redact(err.Error()), kind: transportKind(err)}
 	}
 	c.logf("GET %s -> %d", u, resp.StatusCode)
@@ -150,6 +215,18 @@ func (c *Client) do(ctx context.Context, op, u string, from int64) (*http.Respon
 	b.t.Stop()
 	resp.Body = b
 	return resp, nil
+}
+
+// offHome is u, a request to the home address, sent to the main address instead; false for any other u.
+func (c *Client) offHome(u string) (string, bool) {
+	if c.home == nil {
+		return "", false
+	}
+	hb := c.home.base.String()
+	if rest, ok := strings.CutPrefix(u, hb); ok && strings.HasPrefix(rest, "/rest/") {
+		return c.base.String() + rest, true
+	}
+	return "", false
 }
 
 // idleBody is a response body whose Reads each get idle to see data; then the request is cancelled.
