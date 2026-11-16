@@ -19,6 +19,7 @@ import (
 	"github.com/andsuor/q2-subsonic/internal/creds"
 	"github.com/andsuor/q2-subsonic/internal/fakesonic"
 	"github.com/andsuor/q2-subsonic/internal/fw"
+	"github.com/andsuor/q2-subsonic/internal/q2spot"
 	"github.com/andsuor/q2-subsonic/internal/subsonic"
 )
 
@@ -429,7 +430,7 @@ func TestCatalogueCovers(t *testing.T) {
 		t.Fatal("getCoverArt calls:", n)
 	}
 	// Show in Library off: the covers go with the catalogue
-	r.slToggle(r.settings())
+	r.slToggle(r.settings(), "off")
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -462,5 +463,145 @@ func TestCoversWhileAListPlays(t *testing.T) {
 	r.check(t)
 	if n := r.calls("getCoverArt"); n != 10 || !r.stream.active() {
 		t.Fatal("covers while the list plays from what it fetched:", n)
+	}
+}
+
+// source sets the firmware's Streaming Songs switch as Q2 Pod with "libsource" does: "server",
+// "local", or "" for no q2-addon.library at all.
+func (r *catRig) source(t *testing.T, s string) {
+	t.Helper()
+	p := filepath.Join(r.tmp, "q2-addon.library")
+	if s == "" {
+		os.Remove(p)
+		return
+	}
+	if err := os.WriteFile(p, []byte(s+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (r *catRig) allCalls() int {
+	r.f.Mu.Lock()
+	defer r.f.Mu.Unlock()
+	n := 0
+	for _, c := range r.f.Calls {
+		n += c
+	}
+	return n
+}
+
+// Show in Library is On only while it runs: on firmware with "libsource", only while
+// q2-addon.library says "server". Off there, the row is "needslib"; firmware without the word,
+// which knows no such row, gets an action row, as before.
+func TestShowInLibraryFollowsStreamingSongs(t *testing.T) {
+	for _, c := range []struct {
+		caps, source string
+		saved        bool
+		kind, title  string
+		sub          string
+	}{
+		{"playlist catalogue", "", true, "action", "Show in Library: On", ""},
+		{"playlist catalogue", "local", true, "action", "Show in Library: On", ""}, // no word: the file means nothing
+		{"playlist catalogue", "", false, "action", "Show in Library: Off", "Streaming songs beside the card's"},
+		{"playlist catalogue libsource", "server", true, "action", "Show in Library: On", ""},
+		{"playlist catalogue libsource", "local", true, "needslib", "Show in Library: Off", "Streaming Songs is off"},
+		{"playlist catalogue libsource", "", true, "needslib", "Show in Library: Off", "Streaming Songs is off"},
+		{"playlist catalogue libsource", "server", false, "needslib", "Show in Library: Off", "Streaming songs beside the card's"},
+		{"playlist catalogue libsource", "local", false, "needslib", "Show in Library: Off", "Streaming songs beside the card's"},
+	} {
+		r := newCatRig(t, c.caps, fakesonic.Library(2))
+		r.saveSettings(settings{Library: c.saved})
+		r.source(t, c.source)
+		r.slInit()
+		row, ok := find(r.settingsOp("settings"), "Show in Library")
+		if !ok || row.Kind != c.kind || row.Title != c.title || row.URI != "showlib" ||
+			c.sub != "" && row.Subtitle != c.sub {
+			t.Errorf("%q, file %q, saved %v: %+v", c.caps, c.source, c.saved, row)
+		}
+		if r.slActive() != (c.title == "Show in Library: On") {
+			t.Errorf("%q, file %q, saved %v: slActive %v", c.caps, c.source, c.saved, r.slActive())
+		}
+	}
+}
+
+// Streaming Songs off pauses the Server Library: no request to the server, and its files and
+// Show in Library stay. On again, the server is asked at once, without a new first copy, and the
+// catalogue is written again.
+func TestStreamingSongsPausesAndResumes(t *testing.T) {
+	r := newCatRig(t, "playlist catalogue libsource", fakesonic.Library(5))
+	r.source(t, "server")
+	r.check(t)
+	if r.calls("search3") != 1 || r.calls("ping") == 0 {
+		t.Fatalf("no first copy: %v", r.f.Calls)
+	}
+	seq := catalogue.Seq(r.file(catalogue.CatName))
+	r.source(t, "local")
+	before := r.allCalls()
+	for range 3 {
+		r.sl.mu.Lock()
+		r.sl.up = -1 // a reconnection would check everything
+		r.sl.mu.Unlock()
+		r.check(t)
+	}
+	if n := r.allCalls(); n != before {
+		t.Fatalf("paused, %d requests: %v", n-before, r.f.Calls)
+	}
+	for _, n := range []string{catalogue.CatName, catalogue.SongsName} {
+		if _, err := os.Stat(r.file(n)); err != nil {
+			t.Fatalf("paused, %s went: %v", n, err)
+		}
+	}
+	if !r.settings().Library || !r.sl.on.Load() {
+		t.Fatal("paused, Show in Library was saved off")
+	}
+	r.source(t, "server")
+	r.check(t)
+	if r.calls("ping") == 0 || r.allCalls() == before {
+		t.Fatalf("resumed, no request: %v", r.f.Calls)
+	}
+	if r.calls("search3") != 1 {
+		t.Fatalf("resumed with a new first copy: %v", r.f.Calls)
+	}
+	if got := catalogue.Seq(r.file(catalogue.CatName)); got <= seq {
+		t.Fatalf("catalogue not written again: seq %d, was %d", got, seq)
+	}
+	if row, _ := find(r.settingsOp("settings"), "Show in Library"); row.Title != "Show in Library: On" {
+		t.Fatal(row)
+	}
+}
+
+// press is a press of Settings' Show in Library row as the firmware sends it: its op and context.
+func (r *catRig) press(t *testing.T) q2spot.Reply {
+	t.Helper()
+	row, ok := find(r.settingsOp("settings"), "Show in Library")
+	if !ok {
+		t.Fatal("no Show in Library row")
+	}
+	return r.settingsOp(row.URI, row.Context)
+}
+
+// A "needslib" press arrives once the firmware has turned Streaming Songs on: it is Show in
+// Library on, whether it was saved off, or saved on and waiting for the switch. A tick that sees
+// the switch before the press changes nothing.
+func TestNeedslibPress(t *testing.T) {
+	for _, tick := range []bool{false, true} {
+		r := newCatRig(t, "playlist catalogue libsource", fakesonic.Library(2))
+		r.source(t, "local")
+		r.slInit()
+		row, _ := find(r.settingsOp("settings"), "Show in Library")
+		r.source(t, "server") // the firmware's Turn On, then the press
+		if tick {
+			r.slTick()
+		}
+		if m := r.settingsOp(row.URI, row.Context).Message; m != "Show in Library: On" || !r.settings().Library || !r.slActive() {
+			t.Fatalf("tick %v: %q, saved %v, active %v", tick, m, r.settings().Library, r.slActive())
+		}
+		if m := r.press(t).Message; m != "Show in Library: Off" || r.settings().Library {
+			t.Fatalf("tick %v: %q, saved %v", tick, m, r.settings().Library)
+		}
+		if m := r.press(t).Message; m != "Show in Library: On" || !r.slActive() {
+			t.Fatalf("tick %v: saved off: %q", tick, m)
+		}
+		r.bg.Wait()
 	}
 }

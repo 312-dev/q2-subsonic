@@ -245,7 +245,7 @@ func (d *daemon) reply(req q2spot.Request) q2spot.Reply {
 	case "details":
 		return details(req.Arg(0))
 	case "settings", "defq", "streamq", "report", "cachesz", "cacheclr", "showlib", "resync":
-		return d.settingsOp(req.Op)
+		return d.settingsOp(req.Op, req.Arg(0))
 	case "onq2":
 		return d.onQ2(req.Arg(0))
 	case "resetsel":
@@ -582,7 +582,9 @@ var settingsMu sync.Mutex
 
 const clearWithin = 10 * time.Second // Clear Cache's second press
 
-func (d *daemon) settingsOp(op string) q2spot.Reply {
+// settingsOp answers Settings and its rows' presses; arg is the pressed row's context, which only
+// Show in Library's rows carry (slSettings).
+func (d *daemon) settingsOp(op string, arg ...string) q2spot.Reply {
 	settingsMu.Lock()
 	defer settingsMu.Unlock()
 	s := d.settings()
@@ -639,7 +641,7 @@ func (d *daemon) settingsOp(op string) q2spot.Reply {
 		}
 		return q2spot.Reply{Message: s.reportName()}
 	case "showlib":
-		return d.slToggle(s)
+		return d.slToggle(s, append(arg, "")[0])
 	case "resync":
 		return d.slResync()
 	}

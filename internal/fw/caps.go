@@ -15,6 +15,10 @@ type Caps struct {
 	// The Server Library's words: the firmware reads a catalogue and keeps hearts in step with the
 	// server (q2-coda's docs/server-library.md). The app writes neither's files without its word.
 	Catalogue, Ratings bool
+	// "libsource": the Library's Streaming Songs switch (Local + Server) is the firmware's to set,
+	// and it says which it is in /tmp/q2-addon.library ("server" or "local"). A Show in Library row
+	// of kind "needslib" asks the firmware to turn it on before the row's action is sent.
+	Libsource bool
 	// "signin": a sign-in action's row opens the QR page itself once its refresh makes it a remote
 	// row, the page draws the state file's step (signin.go), and while it is open the firmware keeps
 	// /tmp/q2-<id>.qrpage, so the app knows the page was left without timing the menu's refreshes.
@@ -60,6 +64,8 @@ func ReadCaps(path string) Caps {
 			caps.Ratings = true
 		case "signin":
 			caps.Signin = true
+		case "libsource":
+			caps.Libsource = true
 		}
 	}
 	return caps
