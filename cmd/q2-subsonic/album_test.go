@@ -76,7 +76,7 @@ func TestShuffleAlbum(t *testing.T) {
 
 func TestAlbumSpan(t *testing.T) {
 	for sec, want := range map[int]string{0: "", -5: "", 20: "1 min", 89: "1 min", 90: "2 min", 2280: "38 min",
-		3599: "1 hr", 3600: "1 hr", 4320: "1 hr 12 min", 7290: "2 hr 2 min"} {
+		3599: "1h", 3600: "1h", 4320: "1h12m", 7290: "2h2m"} {
 		if got := span(sec); got != want {
 			t.Errorf("span(%d) = %q, want %q", sec, got, want)
 		}

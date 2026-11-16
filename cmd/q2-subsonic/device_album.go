@@ -2,7 +2,6 @@ package main
 
 import (
 	"cmp"
-	"fmt"
 	"math/rand/v2"
 	"slices"
 
@@ -16,7 +15,7 @@ import (
 
 // albumRows are an album page's rows after Play, for firmware with "album": Shuffle (the album's
 // songs in random order), then an info row "about" whose title is the album's artist and whose
-// subtitle is "2015 · 18 songs · 1 hr 12 min", each part left out when unknown.
+// subtitle is "2015 · 18 songs · 1h12m", each part left out when unknown.
 func albumRows(key string, a subsonic.Album, songs []subsonic.Song) []q2spot.Row {
 	y, sec := a.Year, 0
 	for _, s := range songs {
@@ -33,8 +32,8 @@ func albumRows(key string, a subsonic.Album, songs []subsonic.Song) []q2spot.Row
 		{Kind: "info", URI: "about", Title: artist, Subtitle: join(year(y), plural(len(songs), "song"), span(sec))}}
 }
 
-// span is an album's running time as its page's header says it, "1 hr 12 min" or "38 min"; ""
-// when the server gives no lengths.
+// span is an album's running time as its page's header says it, in the firmware's time units
+// (minutes): "1h12m" or "38 min"; "" when the server gives no lengths.
 func span(sec int) string {
 	m := (sec + 30) / 60
 	switch {
@@ -42,12 +41,8 @@ func span(sec int) string {
 		return ""
 	case m < 1:
 		return "1 min"
-	case m < 60:
-		return fmt.Sprintf("%d min", m)
-	case m%60 == 0:
-		return fmt.Sprintf("%d hr", m/60)
 	}
-	return fmt.Sprintf("%d hr %d min", m/60, m%60)
+	return minutes(m)
 }
 
 // albumSong is a song row of an album's page: v.song, with its length between the artist and the
