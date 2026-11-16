@@ -73,6 +73,7 @@ type nav struct {
 	scanReqs         atomic.Int32                                            // getScanStatus calls served
 	noLastfm         bool                                                    // getTopSongs and getSimilarSongs2 are not implemented (HTTP 501)
 	simCode          int                                                     // getSimilarSongs2 fails with this Subsonic code
+	simStep          bool                                                    // getSimilarSongs2's k-th answer is albums k-1 and k: half of it the last answer's
 	art              bool                                                    // albums and playlists name a cover: their own id
 	cover            func(id string, w http.ResponseWriter, r *http.Request) // getCoverArt's answer; nil is a 64 px JPEG
 	noArtistID       bool                                                    // songs name no artistId
@@ -384,6 +385,9 @@ func (n *nav) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"error": map[string]any{"code": n.simCode, "message": "data not found"}}})
 		case n.empty:
 			ok(key, map[string]any{})
+		case n.simStep && op == "getSimilarSongs2":
+			k := n.reqs(op) // this call counted
+			ok(key, map[string]any{"song": append(n.songs(k-1), n.songs(k)...)})
 		default:
 			ok(key, map[string]any{"song": n.songs(0)})
 		}

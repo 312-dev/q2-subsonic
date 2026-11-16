@@ -107,6 +107,22 @@ type stateKeys struct {
 	hold   bool
 	server string // "" writes no server key
 	sync   string // "" writes no sync key
+	radio  string // the radio's seed title (radio.go); "" writes no radio key
+	ack    string // radioack=: the last .radio request answered, "<seq> <code>"; "" none
+}
+
+func (s *stateKeys) setRadio(v string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.radio = v
+	return s.flush()
+}
+
+func (s *stateKeys) setRadioAck(v string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ack = v
+	return s.flush()
 }
 
 func (s *stateKeys) setSync(v string) error {
@@ -156,6 +172,12 @@ func (s *stateKeys) flush() error {
 	}
 	if s.sync != "" {
 		m["sync"] = s.sync
+	}
+	if s.radio != "" {
+		m["radio"] = s.radio
+	}
+	if s.ack != "" {
+		m["radioack"] = s.ack
 	}
 	return s.st.Write(m)
 }
@@ -277,6 +299,7 @@ type daemon struct {
 	sl                 serverLib        // the Server Library (catalogue.go)
 	qrSeen             bool             // the QR page's marker was there since the sign-in started (qrLeft)
 	st                 stState          // Settings > Storage's files (storage.go)
+	radio              radioState       // the radio playing and its recent songs (radio.go)
 
 	bg sync.WaitGroup // the work replies leave running (ping, preview, play, sign-out's stops); tests wait for it
 }
@@ -356,6 +379,17 @@ func newDaemon(dir, card, tmp string) *daemon {
 	}
 	d.stream.avail, d.stream.pinged = d.slAvail, d.slPinged // before the sweep, whose drops tell avail
 	d.slInit()
+	d.radioInit()
+	d.stream.played = d.radioPlayed
+	d.stream.started = func(radio bool) {
+		if !radio {
+			d.radioEnd() // another list: the radio's songs are gone from the queue
+			return
+		}
+		d.radio.mu.Lock()
+		d.radio.running = true
+		d.radio.mu.Unlock()
+	}
 	d.spawn(func() { d.stream.sweep(keep) })
 	d.art = newArtCache(d, filepath.Join(tmp, "q2-subsonic.art"))
 	d.state.Write(nil)
@@ -452,6 +486,10 @@ func (d *daemon) signOut() {
 		d.log.Printf("sign out: library cache: %v", err)
 	}
 	d.slSignOut()
+	d.radioEnd()
+	d.radio.mu.Lock()
+	d.radio.recent = nil // another account's songs
+	d.radio.mu.Unlock()
 	d.art.clear() // after the client is gone: a fetch that had it stores nothing
 	d.spawn(d.runner.Cancel)
 	d.spawn(func() { // under playMu, so a start already running finishes first and is then stopped
@@ -605,6 +643,7 @@ func (d *daemon) tick() {
 	d.state.setSync(d.syncState())
 	d.slTick()
 	d.stTick()
+	d.radioTick()
 	if d.caps.Library {
 		d.mu.Lock()
 		d.libPoll()

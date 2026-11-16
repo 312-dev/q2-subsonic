@@ -35,6 +35,9 @@ type Caps struct {
 	// Settings > Storage (q2-coda's docs/internals.md#storage): the firmware reads storage.tsv and
 	// writes storage.out. The app writes neither without the word.
 	Storage bool
+	// "radio": Now Playing's Radio asks the app for a song radio in /tmp/q2-<id>.radio, and lights
+	// its pill while the state file says radio= (q2-coda's docs/internals.md#radio).
+	Radio bool
 }
 
 // ReadCaps reads the firmware capabilities from path. A missing file gives all false.
@@ -86,6 +89,8 @@ func ReadCaps(path string) Caps {
 			caps.Playlists = true
 		case "storage":
 			caps.Storage = true
+		case "radio":
+			caps.Radio = true
 		}
 	}
 	return caps

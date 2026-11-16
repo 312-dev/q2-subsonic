@@ -311,7 +311,7 @@ func (d *daemon) reply(req q2spot.Request) q2spot.Reply {
 	case "shuffle":
 		return d.shuffle(ctx, cl, req.Arg(0))
 	case "radio":
-		return d.radio(ctx, cl, req.Arg(0))
+		return d.artistRadio(ctx, cl, req.Arg(0))
 	case "toggle":
 		return d.toggle(ctx, cl, req.Arg(0))
 	case "quality":

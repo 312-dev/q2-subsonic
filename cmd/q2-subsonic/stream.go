@@ -57,6 +57,10 @@ type streamer struct {
 	gap time.Duration
 	// plays reports the songs .playing names to the server.
 	plays *plays
+	// played, optional, is told the id of each server song .playing names (a radio's recent songs).
+	played func(id string)
+	// started, optional, is told of each list started, and whether it is a radio's.
+	started func(radio bool)
 	// The stream cache (cache.go). cacheCap nil: none, and streamed files go as the list plays on.
 	cacheCap func() int64            // its limit in bytes; 0 is Off
 	acct     func() string           // the signed-in account's folder name, "" when signed out
@@ -267,7 +271,13 @@ func streamID(path string) string {
 }
 
 // start replaces whatever streams with songs, playing from index from.
-func (s *streamer) start(songs []subsonic.Song, from int) { s.startRun(songs, nil, from, nil) }
+func (s *streamer) start(songs []subsonic.Song, from int) { s.startRun(songs, nil, from, nil, nil) }
+
+// startRadio is start for a radio (radio.go): paths[i], when not "", is a card file that plays as it
+// is, and refill is asked for more songs whenever radioLow or fewer are left after the one playing.
+func (s *streamer) startRadio(songs []subsonic.Song, paths []string, refill func() []subsonic.Song) {
+	s.startRun(songs, paths, 0, nil, refill)
+}
 
 // catPlay is a queue the firmware asked for from its Library (.catplay): seq answers it in .play,
 // and local is the stream cache's copies by song id, of any quality, which play as they are.
@@ -281,10 +291,10 @@ type catPlay struct {
 // not on the card are taken out of its queue file (dropUncached), so the firmware plays on past
 // them rather than wait.
 func (s *streamer) startCat(songs []subsonic.Song, paths []string, from int, c *catPlay) {
-	s.startRun(songs, paths, from, c)
+	s.startRun(songs, paths, from, c, nil)
 }
 
-func (s *streamer) startRun(songs []subsonic.Song, paths []string, from int, cat *catPlay) {
+func (s *streamer) startRun(songs []subsonic.Song, paths []string, from int, cat *catPlay, refill func() []subsonic.Song) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stopLocked()
@@ -292,6 +302,9 @@ func (s *streamer) startRun(songs []subsonic.Song, paths []string, from int, cat
 		return
 	}
 	s.setErr(nil)
+	if s.started != nil {
+		s.started(refill != nil)
+	}
 	stale, staleAt := s.playingNow() // belongs to the previous list
 	s.clean()                        // old queue file, stale and half-fetched songs
 	m := s.manifest()
@@ -302,27 +315,13 @@ func (s *streamer) startRun(songs []subsonic.Song, paths []string, from int, cat
 			jobs[i] = job{path: paths[i]}
 			continue
 		}
-		if e := m.Songs[sg.ID]; s.caps.Playlist && s.synced(e) {
-			jobs[i] = job{path: e.Path}
-			continue
-		}
-		if p := cat.copy(sg.ID); p != "" {
-			jobs[i] = job{path: p, cached: true}
-			continue
-		}
-		ext, q := s.format(sg)
-		if p := s.cachePath(base, sg, ext, q); p != "" {
-			jobs[i] = job{path: p, fetch: true, quality: q, cached: true}
-			continue
-		}
-		name := fmt.Sprintf("%04d - %s [%s].%s", i, library.SafeName(sg.Title), library.SafeName(sg.ID), ext)
-		jobs[i] = job{path: filepath.Join(s.dir(), name), fetch: true, quality: q}
+		jobs[i] = s.jobFor(i, sg, m, base, cat)
 	}
 	seq := time.Now().UnixNano() // never reused
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel, s.done = cancel, make(chan struct{})
 	r := &streamRun{s: s, ctx: ctx, songs: slices.Clone(songs), jobs: jobs, from: from, last: from, seq: seq,
-		stale: stale, staleAt: staleAt, heard: staleAt, playSeq: seq}
+		stale: stale, staleAt: staleAt, heard: staleAt, playSeq: seq, refill: refill}
 	if cat != nil {
 		r.cat, r.playSeq = true, cat.seq
 	}
@@ -357,8 +356,67 @@ type streamRun struct {
 	skips     int       // songs skipped since the last one fetched
 	keptLo    int       // the first job protected, and how many jobs there were then
 	keptN     int
-	cat       bool  // a catalogue queue (startCat)
-	playSeq   int64 // the seq .play names: seq, or the .catplay's it answers
+	cat       bool                   // a catalogue queue (startCat)
+	playSeq   int64                  // the seq .play names: seq, or the .catplay's it answers
+	refill    func() []subsonic.Song // a radio's: more songs for its end (startRadio); nil for any other list
+	refillAt  time.Time              // no ask for more before, after one that brought none
+}
+
+// jobFor is how song sg, the list's i-th, plays: from the card when it is synced, from the stream
+// cache's copy (cat's for a catalogue queue, or one to fetch there), else fetched into the stream folder.
+func (s *streamer) jobFor(i int, sg subsonic.Song, m *library.Manifest, base string, cat *catPlay) job {
+	if e := m.Songs[sg.ID]; s.caps.Playlist && s.synced(e) {
+		return job{path: e.Path}
+	}
+	if p := cat.copy(sg.ID); p != "" {
+		return job{path: p, cached: true}
+	}
+	ext, q := s.format(sg)
+	if p := s.cachePath(base, sg, ext, q); p != "" {
+		return job{path: p, fetch: true, quality: q, cached: true}
+	}
+	name := fmt.Sprintf("%04d - %s [%s].%s", i, library.SafeName(sg.Title), library.SafeName(sg.ID), ext)
+	return job{path: filepath.Join(s.dir(), name), fetch: true, quality: q}
+}
+
+// radioLow is how many songs a radio has left after the one playing when it asks for more, and
+// radioRetry how long it waits to ask again after an ask that brought none.
+const (
+	radioLow   = 10
+	radioRetry = 30 * time.Second
+)
+
+// more asks a radio for songs once radioLow or fewer are left after cur, and adds them to the end of
+// the list and the queue file, which the firmware reads again and plays on into. 1 when it added any.
+func (r *streamRun) more(cur int) bool {
+	if r.refill == nil || r.queue == "" || len(r.jobs)-1-cur > radioLow || time.Now().Before(r.refillAt) {
+		return false
+	}
+	add := r.refill()
+	if r.ctx.Err() != nil {
+		return false
+	}
+	if len(add) == 0 {
+		r.refillAt = time.Now().Add(radioRetry)
+		return false
+	}
+	m, base := r.s.manifest(), r.s.cacheBase()
+	for _, sg := range add {
+		r.jobs = append(r.jobs, r.s.jobFor(len(r.jobs), sg, m, base, nil))
+		r.songs = append(r.songs, sg)
+	}
+	select { // the firmware reads the file again only when its mtime's second changes
+	case <-r.ctx.Done():
+		return false
+	case <-time.After(r.s.gap - time.Since(r.wrote)):
+	}
+	if err := r.writeQueue(); err != nil {
+		r.s.logf("stream: radio: queue: %v", err)
+		return false
+	}
+	r.s.logf("stream: radio: %d songs added, %d in the list", len(add), len(r.jobs))
+	r.protect(max(r.from, cur-streamWindow), len(r.jobs))
+	return true
 }
 
 // copy is the stream cache's whole copy of song id, "" when it has none (or c is nil).
@@ -563,6 +621,9 @@ func (r *streamRun) run() {
 		if !at.Equal(r.heard) {
 			if r.heard = at; now == r.jobs[cur].path && r.songs[cur].ID != "" { // a card file of a catalogue queue is not the server's
 				r.s.plays.now(r.songs[cur], late)
+				if r.s.played != nil {
+					r.s.played(r.songs[cur].ID)
+				}
 				if r.jobs[cur].cached { // played now: the last to be evicted
 					library.Touch(r.s.root, now, r.s.now())
 				}
@@ -589,7 +650,10 @@ func (r *streamRun) run() {
 		// Waiting for a lost server is no transfer: it must not keep the Q2 from standby.
 		r.s.xfer.Store(want >= 0 && !r.jobs[want].away)
 		r.quietBy = since.Add(idle + time.Duration(r.songs[cur].Duration)*time.Second)
-		fetched := false
+		fetched := r.more(cur)
+		if fetched {
+			continue // the window and the run's end are looked at again with the new songs
+		}
 		if want >= 0 && !time.Now().Before(r.jobs[want].next) { // else backing off
 			if err := r.fetch(r.songs[want], r.jobs[want]); err == nil {
 				if r.jobs[want].away { // the server is back

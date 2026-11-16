@@ -248,21 +248,6 @@ func (d *daemon) shuffle(ctx context.Context, cl *subsonic.Client, arg string) q
 	return d.playNow(songs, "Nothing to play")
 }
 
-// radio plays songs like an artist's, as the server picks them.
-func (d *daemon) radio(ctx context.Context, cl *subsonic.Client, arg string) q2spot.Reply {
-	_, id := parseKey(arg)
-	songs, err := cl.SimilarSongs(ctx, id, radioSongs)
-	switch {
-	case subsonic.Unsupported(err):
-		return q2spot.Fail(q2spot.Unavailable, notHere)
-	case errors.Is(err, subsonic.ErrNotFound): // Navidrome's answer when it knows none
-		songs = nil
-	case err != nil:
-		return d.errToast(err)
-	}
-	return d.playNow(songs, "No similar songs found")
-}
-
 // playArtist plays every album of an artist, in order or shuffled. The reply asks only for the
 // artist; the albums' songs are fetched behind it, as many albums don't fit one reply's time. A
 // later play, or Sign Out, in that time wins: this one then neither starts nor leaves its error.
