@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
@@ -151,8 +152,8 @@ func TestSigninNeedsKeyOrPIN(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("page with cookie: %d", resp.StatusCode)
 	}
-	if pg, _ := io.ReadAll(resp.Body); !strings.Contains(string(pg), "unencrypted") {
-		t.Fatal("page does not say the password is sent unencrypted")
+	if pg, _ := io.ReadAll(resp.Body); !strings.Contains(string(pg), "Sent once over your Wi-Fi to the Q2") {
+		t.Fatal("page does not say how the password travels")
 	}
 	// PIN
 	resp, _ = r.post(t, "/api/login", `{"pin":"`+r.s.pin+`"}`, true, nil)
@@ -465,7 +466,146 @@ func TestSigninBadAddressNotEchoed(t *testing.T) {
 	r := newRig(t)
 	_, body := r.post(t, "/api/signin", `{"server":"https://alice:my pass@host.example","user":"u","password":"pw"}`, true, r.login(t))
 	st, _ := os.ReadFile(filepath.Join(r.dir, "state"))
-	if strings.Contains(body, "my pass") || strings.Contains(string(st), "my pass") || !strings.Contains(body, "the server") {
+	if strings.Contains(body, "my pass") || strings.Contains(string(st), "my pass") || !strings.Contains(body, `"field":"server"`) {
 		t.Fatalf("phone %s\nstate %s", body, st)
+	}
+}
+
+// The QR code's link serves the form at once with the cookie: no redirect, which a phone opening
+// it from the camera (a cross-site navigation) would follow without the SameSite=Strict cookie it
+// set, landing on the PIN step. The key leaves the Q2 saying to go on on the phone.
+func TestSigninQRLinkSkipsPIN(t *testing.T) {
+	r := newRig(t)
+	resp, err := noRedirect().Get(r.base + "/?k=" + r.s.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pg, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if c := cookieOf(resp); resp.StatusCode != 200 || c == nil || !strings.Contains(string(pg), `data-auth="1"`) {
+		t.Fatalf("%d cookie %v", resp.StatusCode, c)
+	}
+	st, _ := os.ReadFile(filepath.Join(r.dir, "state"))
+	for _, k := range []string{"step=phone", "title=Continue on Your Phone", "pin=" + r.s.pin, "qrsize="} {
+		if !strings.Contains(string(st), k) {
+			t.Errorf("state lacks %q:\n%s", k, st)
+		}
+	}
+	// a page typed by hand asks for the PIN, and the Q2 keeps showing its code until it comes
+	r2 := newRig(t)
+	resp, _ = noRedirect().Get(r2.base + "/")
+	pg, _ = io.ReadAll(resp.Body)
+	st, _ = os.ReadFile(filepath.Join(r2.dir, "state"))
+	if resp.StatusCode != 401 || !strings.Contains(string(pg), `data-auth="0"`) || strings.Contains(string(st), "step=") {
+		t.Fatalf("%d state %s", resp.StatusCode, st)
+	}
+	r2.login(t)
+	if st, _ = os.ReadFile(filepath.Join(r2.dir, "state")); !strings.Contains(string(st), "step=phone") {
+		t.Fatalf("after the PIN: %s", st)
+	}
+}
+
+// A sign-in sent without the PIN taken says to enter it, for the PIN step.
+func TestSigninNeedsPINFirst(t *testing.T) {
+	r := newRig(t)
+	resp, body := r.post(t, "/api/signin", `{"server":"`+r.nd.URL+`","user":"u","password":"pw"}`, true, nil)
+	if resp.StatusCode != 401 || !strings.Contains(body, "Enter the PIN shown on the Q2 first.") || !strings.Contains(body, `"field":"pin"`) {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+}
+
+func TestCleanServer(t *testing.T) {
+	for _, c := range []struct{ in, want, refused string }{
+		{"https://music.example.com", "https://music.example.com", ""},
+		{" music.example.com/ ", "https://music.example.com", ""},
+		{"https://music.example.com/rest/ping.view?u=a&p=secret&v=1.16.1&c=x", "https://music.example.com", ""},
+		{"https://example.com/navidrome/rest", "https://example.com/navidrome", ""},
+		{"https://example.com/navidrome/REST/getAlbum", "https://example.com/navidrome", ""},
+		{"https://example.com/restaurant", "https://example.com/restaurant", ""},
+		{"https://host.tail5d173a.ts.net:4533#x", "https://host.tail5d173a.ts.net:4533", ""},
+		{"http://192.168.1.5:4533", "", "only over https://"},
+		{"", "", "Enter your server's address."},
+		{"ftp://x", "", "isn't a server address"},
+	} {
+		got, bad := cleanServer(c.in)
+		if got != c.want || (bad == nil) != (c.refused == "") || (bad != nil && (!strings.Contains(bad.msg, c.refused) || bad.field != "server")) {
+			t.Errorf("%q: %q %+v", c.in, got, bad)
+		}
+	}
+}
+
+// A server the Q2 can't reach says so under the Server field, and the Q2's page says it too; a
+// tailnet address (*.ts.net, or one resolving into 100.64.0.0/10) is named as Tailscale-only.
+func TestSigninUnreachableHints(t *testing.T) {
+	for _, c := range []struct {
+		server, phone, line string
+		ips                 []net.IP
+	}{
+		{"https://127.0.0.1:1", reachLAN, reachLANLine, nil},
+		{"https://localhost:1", reachTS, reachTSLine, []net.IP{net.IPv4(100, 101, 2, 3)}},
+		{"https://localhost:1", reachLAN, reachLANLine, []net.IP{net.IPv4(192, 168, 1, 5)}},
+	} {
+		r := newRig(t, func(s *signin, _ *httptest.Server) {
+			s.lookup = func(context.Context, string) ([]net.IP, error) { return c.ips, nil }
+		})
+		_, body := r.post(t, "/api/signin", `{"server":"`+c.server+`","user":"u","password":"pw"}`, true, r.login(t))
+		var got struct {
+			OK             bool
+			Message, Field string
+		}
+		json.Unmarshal([]byte(body), &got)
+		st, _ := os.ReadFile(filepath.Join(r.dir, "state"))
+		if got.OK || got.Message != c.phone || got.Field != "server" || !strings.Contains(string(st), "step=fail") ||
+			!strings.Contains(string(st), "title=Can't Reach the Server") || !strings.Contains(string(st), "line="+c.line) {
+			t.Errorf("%s %v: %s\n%s", c.server, c.ips, body, st)
+		}
+	}
+	s := &signin{}
+	if !s.tailnet(context.Background(), "macmini.tail5d173a.ts.net") || !s.tailnet(context.Background(), "100.127.255.1") ||
+		s.tailnet(context.Background(), "100.128.0.1") {
+		t.Error("tailnet")
+	}
+}
+
+// A success leaves the Q2's page on Signed In (user on host) and keeps the address, without any
+// user:password@, for the next sign-in's form.
+func TestSigninDoneAndRemembered(t *testing.T) {
+	r := newRig(t)
+	r.post(t, "/api/signin", `{"server":"`+r.nd.URL+`/rest/","user":"u","password":"pw"}`, true, r.login(t))
+	var st []byte
+	eventually(t, "the stop's state", func() bool { // stop clears ln, then writes the state
+		st, _ = os.ReadFile(filepath.Join(r.dir, "state"))
+		return !r.s.active() && !strings.Contains(string(st), "pin=")
+	})
+	host := strings.TrimPrefix(r.nd.URL, "https://")
+	host = host[:strings.LastIndex(host, ":")]
+	for _, k := range []string{"step=done", "title=Signed In", "line=u on " + host, "note=Signed in as u · Press Return"} {
+		if !strings.Contains(string(st), k) {
+			t.Errorf("state lacks %q:\n%s", k, st)
+		}
+	}
+	if cr, _ := creds.Load(r.dir); cr.Server != r.nd.URL {
+		t.Errorf("saved %q", cr.Server)
+	}
+	r.s.start(0)
+	r.s.mu.Lock()
+	base, key := "http://"+r.s.ln.Addr().String(), r.s.key
+	r.s.mu.Unlock()
+	resp, err := noRedirect().Get(base + "/?k=" + key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pg, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(pg), `data-server="`+r.nd.URL+`"`) {
+		t.Error("the form isn't filled with the last server")
+	}
+	r.base = base // the restarted page's
+	if _, body := r.post(t, "/api/login", `{"pin":"`+r.s.pin+`"}`, true, nil); !strings.Contains(body, `"server":"`+r.nd.URL+`"`) {
+		t.Errorf("the PIN's answer lacks the last server: %s", body)
+	}
+	os.WriteFile(filepath.Join(r.dir, lastServerFile), []byte(`https://x"><script>`), 0o600)
+	resp, _ = noRedirect().Get(base + "/?k=" + key)
+	if pg, _ = io.ReadAll(resp.Body); strings.Contains(string(pg), `x"><script>`) {
+		t.Error("the last server isn't escaped")
 	}
 }

@@ -34,7 +34,7 @@ const (
 	signinPort  = 8080             // or the next free one
 	previewTTL  = time.Minute      // a preview older than this is computed again when Sync is opened
 	pingEvery   = 30 * time.Second
-	qrLeftAfter = 5 * time.Second // a gap this long in the signed-out menu's 2 s refresh: the QR page was open
+	qrLeftAfter = 5 * time.Second // a gap this long in the signed-out menu's 2 s refresh: the QR page was open (no "signin" word)
 	browseTTL   = time.Minute     // a list fetched for browsing serves its pages, and a song pressed on it, this long
 	cacheMax    = 4               // lists kept at most: the newest
 )
@@ -258,6 +258,7 @@ type daemon struct {
 	listed             songList         // the song list shown last
 	clearAt            time.Time        // Clear Cache's first press: a second one soon after clears
 	sl                 serverLib        // the Server Library (catalogue.go)
+	qrSeen             bool             // the QR page's marker was there since the sign-in started (qrLeft)
 
 	bg sync.WaitGroup // the work replies leave running (ping, preview, play, sign-out's stops); tests wait for it
 }
@@ -563,12 +564,30 @@ func (d *daemon) tick() {
 		d.cardWalked = false
 		d.mu.Unlock()
 	}
+	d.qrLeft()
 	d.state.setHold(busy || d.signin.active() || d.stream.busy() || d.sl.busy.Load())
 	d.slTick()
 	if d.caps.Library {
 		d.mu.Lock()
 		d.libPoll()
 		d.mu.Unlock()
+	}
+}
+
+// qrLeft stops the sign-in once the QR page is left, on Q2 Pod with "signin": the firmware keeps
+// /tmp/q2-subsonic.qrpage while the page is open, so its going after it was seen is the page closed.
+// A page never opened leaves it to the ten minutes.
+func (d *daemon) qrLeft() {
+	if !d.caps.Signin || !d.signin.active() {
+		return
+	}
+	_, err := os.Stat(filepath.Join(d.tmp, "q2-subsonic.qrpage"))
+	d.mu.Lock()
+	left := err != nil && d.qrSeen
+	d.qrSeen = err == nil
+	d.mu.Unlock()
+	if left {
+		d.signin.stop()
 	}
 }
 

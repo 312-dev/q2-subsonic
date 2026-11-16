@@ -15,6 +15,10 @@ type Caps struct {
 	// The Server Library's words: the firmware reads a catalogue and keeps hearts in step with the
 	// server (q2-coda's docs/server-library.md). The app writes neither's files without its word.
 	Catalogue, Ratings bool
+	// "signin": a sign-in action's row opens the QR page itself once its refresh makes it a remote
+	// row, the page draws the state file's step (signin.go), and while it is open the firmware keeps
+	// /tmp/q2-<id>.qrpage, so the app knows the page was left without timing the menu's refreshes.
+	Signin bool
 }
 
 // ReadCaps reads the firmware capabilities from path. A missing file gives all false.
@@ -54,6 +58,8 @@ func ReadCaps(path string) Caps {
 			caps.Catalogue = true
 		case "ratings":
 			caps.Ratings = true
+		case "signin":
+			caps.Signin = true
 		}
 	}
 	return caps

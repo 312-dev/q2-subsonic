@@ -18,12 +18,13 @@ A Subsonic client for the **Shanling Q2** running [Q2 Pod](https://github.com/Di
 ## Sign in
 
 1. Open **Streaming → Subsonic**. While signed out, the only row is **Sign In from Your Phone**.
-2. Press it to start the sign-in page, then press it again to open the QR page. The Q2 shows a QR code and a PIN. Scan the code with your phone on the same Wi-Fi (or open the address and type the PIN) and fill in the server address, user name and password.
-3. The Q2 checks the login and the list opens. If it fails, the phone and the row say why.
+2. Press it. The Q2 shows a QR code, and under it the page's address and a PIN. Scan the code with your phone on the same Wi-Fi and the form opens straight away; if you type the address instead, the page asks for the PIN first. Fill in the server address, user name and password. A server address pasted with its API path (`/rest/…`) is cut back to the server's. (On Q2 Pod without the `signin` extension, press the row a second time to open the QR page.)
+3. The Q2 follows along: **Continue on Your Phone**, **Signing In…**, then **Signed In** and the list opens. If it fails, the phone says why under the field it concerns, and the Q2 and the row say so too. The next sign-in fills in the last server you signed in to.
 
 Things to know:
 
-- The sign-in page runs only after you press **Sign In from Your Phone**, and stops when you are signed in, when you leave the QR page, or after 10 minutes. Until you press it, the app opens no port.
+- The sign-in page runs only after you press **Sign In from Your Phone**, and stops when you are signed in, when you leave the QR page, or after 10 minutes. The screen turning off doesn't stop it. Until you press it, the app opens no port.
+- A server only on Tailscale (a `*.ts.net` name or a `100.64.0.0/10` address) can't be reached from the Q2: use its public address.
 - The password crosses your local Wi-Fi unencrypted, once, from the phone to the Q2. Do it on a network you trust.
 - The server must be `https://`; `http://` is refused. Certificates are verified.
 - The password is stored on the card, in `.subsonic/credentials`. If your server offers OpenSubsonic API keys (`apiKeyAuthentication`), enter a key from its settings as the password instead: then only the key is stored. exFAT has no file permissions, so anyone with the card can read it. **Make a server user just for the Q2, not an admin.** If the card is lost, delete that user on the server and the card is worthless.

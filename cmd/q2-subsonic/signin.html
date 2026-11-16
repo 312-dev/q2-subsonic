@@ -2,73 +2,150 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
 <title>Sign in to your music server</title>
 <style>
-:root { --bg: #f4f5f7; --panel: #fff; --line: #dfe2e7; --text: #16191d; --muted: #646b75;
-  --accent: #b86e00; --accent-ink: #fff; --accent-soft: #fbecd2; --bad: #c62f3a; --good: #1f8a70; }
-@media (prefers-color-scheme: dark) { :root {
-  --bg: #0f1215; --panel: #171b20; --line: #2a3138; --text: #e9edf1; --muted: #98a2ad;
-  --accent: #f0a73a; --accent-ink: #1d1200; --accent-soft: #3a2a12; --bad: #ff6b74; --good: #3cc49f; } }
+:root { --bg: #000; --card: #1c1c1e; --sep: #38383a; --text: #fff; --sec: #8e8e93; --ph: #5a5a5e;
+  --accent: #2160d8; --good: #34c759; --bad: #ff453a; }
 * { box-sizing: border-box; }
-html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-text-size-adjust: 100%; }
-main { max-width: 440px; margin: 0 auto; padding: calc(24px + env(safe-area-inset-top)) 16px 48px; }
-h1 { font-size: 20px; margin: 0 0 16px; }
-form { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
-label { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin: 12px 0 4px; }
-label:first-of-type { margin-top: 0; }
-input { width: 100%; min-height: 44px; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; outline: none; }
-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-button { width: 100%; min-height: 44px; margin-top: 16px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); border-radius: 10px; font: inherit; font-weight: 650; cursor: pointer; }
+html, body { margin: 0; background: var(--bg); color: var(--text); -webkit-text-size-adjust: 100%;
+  font: 17px/1.35 Inter, -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+main { max-width: 440px; margin: 0 auto; padding: calc(40px + env(safe-area-inset-top)) 20px 48px; }
+h1 { font-size: 32px; font-weight: 700; margin: 8px 4px 4px; letter-spacing: -.4px; }
+.sub { color: var(--sec); margin: 0 4px 22px; font-size: 15px; }
+.chip { display: inline-block; background: var(--card); border-radius: 8px; padding: 2px 8px; color: var(--sec); font-size: 13px; white-space: nowrap; }
+.group { background: var(--card); border-radius: 12px; overflow: hidden; }
+.f { display: flex; align-items: center; min-height: 48px; padding: 0 16px; border-bottom: 1px solid var(--sep); }
+.f:last-child { border-bottom: 0; }
+.f label { flex: 0 0 96px; }
+.f input { flex: 1; min-width: 0; min-height: 46px; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; padding: 0; }
+.f input::placeholder { color: var(--ph); }
+.foot { color: var(--sec); font-size: 13px; margin: 6px 16px 22px; }
+.err { color: var(--bad); font-size: 14px; margin: 8px 16px 22px; }
+.err:empty { display: none; }
+.err:not(:empty) + .foot { display: none; }
+button { display: block; width: 100%; border: 0; background: var(--accent); color: #fff; border-radius: 12px; padding: 15px;
+  font: inherit; font-weight: 600; cursor: pointer; }
 button:disabled { opacity: .45; cursor: default; }
-.note { margin: 12px 0 0; font-size: 13px; color: var(--muted); }
-#msg { margin-top: 12px; min-height: 1.4em; font-weight: 600; }
-#msg.bad { color: var(--bad); } #msg.good { color: var(--good); }
-body[data-auth="1"] #pinbox, body[data-auth="0"] #signbox { display: none; }
+.pin { position: relative; display: flex; gap: 8px; justify-content: center; margin: 30px 0 14px; }
+.pin div { width: 46px; height: 58px; border-radius: 10px; background: var(--card); display: grid; place-items: center; font-size: 28px; font-weight: 600; }
+.pin div.cur { outline: 2px solid var(--accent); }
+.pin input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; font-size: 16px; caret-color: transparent; }
+.center { text-align: center; }
+.center .err, .center .foot { margin-left: 0; margin-right: 0; }
+.big { width: 84px; height: 84px; border-radius: 42px; background: var(--good); display: grid; place-items: center; margin: 120px auto 22px; }
+[hidden] { display: none !important; }
 </style>
 </head>
-<body data-auth="1">
+<body data-auth="1" data-server="">
 <main>
-  <h1>Sign in to your music server</h1>
-  <form id="pinbox" autocomplete="off">
-    <label for="pin">PIN shown on the Q2</label>
-    <input id="pin" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code">
-    <button type="submit">Continue</button>
+  <section id="pinstep" hidden>
+    <h1>Enter PIN</h1>
+    <p class="sub">Shown on your Q2 under the QR code.</p>
+    <div class="pin" id="boxes"><div></div><div></div><div></div><div></div><div></div><div></div>
+      <input id="pin" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" aria-label="PIN"></div>
+    <div class="center"><p class="err" id="pinerr" role="alert"></p><p class="foot">Or scan the QR code to skip this step.</p></div>
+  </section>
+
+  <form id="signstep" hidden novalidate>
+    <h1>Sign In</h1>
+    <p class="sub">Your Q2 will use this server. <span class="chip" id="chip"></span></p>
+    <div class="group"><div class="f"><label for="server">Server</label>
+      <input id="server" type="url" inputmode="url" placeholder="https://music.example.com" autocapitalize="off" autocorrect="off" spellcheck="false"></div></div>
+    <p class="err" id="servererr" role="alert"></p>
+    <p class="foot">Your Subsonic server's address. It must start with https://</p>
+    <div class="group">
+      <div class="f"><label for="user">Username</label>
+        <input id="user" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="username"></div>
+      <div class="f"><label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password"></div>
+    </div>
+    <p class="err" id="usererr" role="alert"></p>
+    <p class="foot">Sent once over your Wi-Fi to the Q2, then checked with your server. An API key works too.</p>
+    <button type="submit" id="go">Sign In</button>
   </form>
-  <form id="signbox">
-    <label for="server">Server</label>
-    <input id="server" type="url" value="https://" autocapitalize="off" autocorrect="off" spellcheck="false" required>
-    <label for="user">Username</label>
-    <input id="user" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="username" required>
-    <label for="password">Password or API key</label>
-    <input id="password" type="password" autocomplete="current-password" required>
-    <button type="submit">Sign In</button>
-    <p class="note">Your password is sent once, unencrypted, over this Wi-Fi to the Q2. Do this on a network you trust. It is then checked against your server and kept only on the Q2's card. If your server offers API keys, enter one instead: only the key is kept.</p>
-  </form>
-  <div id="msg" role="status"></div>
+
+  <section id="donestep" class="center" hidden>
+    <div class="big"><svg width="44" height="44" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <h1>You're Signed In</h1>
+    <p class="sub">Your Q2 is opening your library. You can close this page.</p>
+  </section>
 </main>
 <script>
-const $ = id => document.getElementById(id), msg = $('msg');
-function say(t, cls) { msg.textContent = t; msg.className = cls || ''; }
+const $ = id => document.getElementById(id);
+const steps = ['pinstep', 'signstep', 'donestep'];
+function show(id) { for (const s of steps) $(s).hidden = s !== id; }
+function err(id, t) { $(id).textContent = t || ''; }
 async function post(path, body) {
   const r = await fetch(path, { method: 'POST', headers: { 'X-Q2': '1', 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   return { status: r.status, body: await r.json().catch(() => ({})) };
 }
-$('pinbox').onsubmit = async e => {
+const closed = 'The Q2 closed sign-in. Start it again on the Q2.';
+
+// The QR code's key leaves the address bar once the Q2 has taken it.
+if (location.search) history.replaceState(null, '', '/');
+$('chip').textContent = 'Q2 · ' + location.hostname;
+
+// The PIN: six boxes over one field, sent as soon as the sixth digit is in.
+const pin = $('pin'), boxes = [...$('boxes').children].slice(0, 6);
+function paint() {
+  const v = pin.value;
+  boxes.forEach((b, i) => { b.textContent = v[i] || ''; b.className = i === Math.min(v.length, 5) && document.activeElement === pin ? 'cur' : ''; });
+}
+pin.addEventListener('focus', paint); pin.addEventListener('blur', paint);
+pin.addEventListener('input', async () => {
+  pin.value = pin.value.replace(/\D/g, '').slice(0, 6);
+  paint();
+  if (pin.value.length < 6) return;
+  err('pinerr');
+  let r;
+  try { r = await post('/api/login', { pin: pin.value }); } catch (_) { err('pinerr', closed); return; }
+  if (r.status === 200) { if (r.body.server) document.body.dataset.server = r.body.server; signForm(); return; }
+  err('pinerr', r.body.error || "That isn't the PIN on the Q2's screen.");
+  pin.value = ''; paint();
+});
+
+function signForm() {
+  show('signstep');
+  const s = $('server');
+  if (!s.value) s.value = document.body.dataset.server || '';
+  (s.value ? $('user') : s).focus();
+}
+
+// What the Q2 does with the address too (signin.go cleanServer): https:// added when no scheme is
+// typed, an API path pasted with it cut off. http:// is refused here, before a password is sent.
+function clean(v) {
+  v = v.trim();
+  if (v && !/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) v = 'https://' + v;
+  return v.replace(/[?#].*$/, '').replace(/\/rest(\/.*)?$/i, '').replace(/\/+$/, '');
+}
+
+$('signstep').onsubmit = async e => {
   e.preventDefault();
-  const r = await post('/api/login', { pin: $('pin').value.trim() });
-  if (r.status === 200) location.reload();
-  else say(r.body.error || 'That is not the PIN on the Q2.', 'bad');
-};
-$('signbox').onsubmit = async e => {
-  e.preventDefault();
-  const b = e.target.querySelector('button'); b.disabled = true; say('Checking…');
+  err('servererr'); err('usererr');
+  const server = clean($('server').value);
+  $('server').value = server;
+  if (!server) { err('servererr', "Enter your server's address."); $('server').focus(); return; }
+  if (/^http:\/\//i.test(server)) {
+    err('servererr', "The Q2 signs in only over https://, so your password never crosses the network unencrypted. Use your server's https:// address.");
+    $('server').focus(); return;
+  }
+  if (!$('user').value.trim()) { err('usererr', 'Enter your username.'); $('user').focus(); return; }
+  if (!$('password').value) { err('usererr', 'Enter your password or API key.'); $('password').focus(); return; }
+  const b = $('go'); b.disabled = true; b.textContent = 'Signing In…';
+  let r;
   try {
-    const r = await post('/api/signin', { server: $('server').value.trim(), user: $('user').value.trim(), password: $('password').value });
-    if (r.status === 200) { say(r.body.message, r.body.ok ? 'good' : 'bad'); if (r.body.ok) $('password').value = ''; else b.disabled = false; }
-    else { say(r.body.error || 'Sign-in is closed. Open it again on the Q2.', 'bad'); b.disabled = false; }
-  } catch (_) { say('Sign-in is closed. Open it again on the Q2.', 'bad'); }
+    r = await post('/api/signin', { server, user: $('user').value.trim(), password: $('password').value });
+  } catch (_) { r = { status: 0, body: { error: closed } }; }
+  b.disabled = false; b.textContent = 'Try Again';
+  if (r.status === 200 && r.body.ok) { $('password').value = ''; show('donestep'); return; }
+  const why = r.body.message || r.body.error || closed;
+  if (r.body.field === 'pin') { pin.value = ''; paint(); show('pinstep'); err('pinerr', why); pin.focus(); return; }
+  err(r.body.field === 'server' ? 'servererr' : 'usererr', why);
 };
+
+if (document.body.dataset.auth === '1') signForm(); else { show('pinstep'); pin.focus(); paint(); }
 </script>
 </body>
 </html>

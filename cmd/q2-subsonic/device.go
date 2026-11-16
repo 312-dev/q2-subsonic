@@ -255,8 +255,12 @@ func (d *daemon) reply(req q2spot.Request) q2spot.Reply {
 	case "signin":
 		d.mu.Lock()
 		d.lastMenu = time.Now() // pressed on the root: its toast is no gap
+		d.qrSeen = false
 		d.mu.Unlock()
 		d.signin.start(d.signinPort)
+		if d.caps.Signin { // the firmware opens the QR page as the refresh makes the row remote
+			return q2spot.Reply{}
+		}
 		return q2spot.Reply{Message: "Press again for the QR code"} // the row turns into the QR page's
 	}
 	cl := d.client()
@@ -383,8 +387,10 @@ func details(ctx string) q2spot.Reply {
 // menu is the root. Signed out it is the phone sign-in, kept live so the root turns into the
 // signed-in menu once the phone succeeds. The sign-in page (a port on the LAN, and hold=1) starts
 // only when its action row is pressed; the row then opens the QR page (remote, which sends
-// nothing). The 2 s refresh pauses while the QR page is on top, and the first request after such a
-// gap means it was left: the sign-in stops there, so nothing listens once the user has gone (M4).
+// nothing), which Q2 Pod with "signin" opens at once. The sign-in stops once the QR page is left,
+// so nothing listens once the user has gone (M4): with "signin" when the page's marker file goes
+// (tick, qrLeft), which the screen turning off doesn't touch; without it, by the first request after
+// a gap in the 2 s refresh, which pauses while the QR page is on top (and while the screen is off).
 // The last failure stays as the row's subtitle (I24).
 //
 // On Q2 Pod with "sections" the signed-in root names the first page's tabs instead, each a row the
@@ -399,7 +405,7 @@ func (d *daemon) menu(sec string) q2spot.Reply {
 	d.mu.Unlock()
 	cl := d.client()
 	if cl == nil {
-		if gap > qrLeftAfter && d.signin.active() {
+		if !d.caps.Signin && gap > qrLeftAfter && d.signin.active() {
 			d.signin.stop()
 		}
 		_, msg := d.signin.result()

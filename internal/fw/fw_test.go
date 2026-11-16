@@ -39,9 +39,9 @@ func TestCapsWords(t *testing.T) {
 // word of a later Q2 Pod are passed over.
 func TestCapsEveryWord(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "caps")
-	os.WriteFile(f, []byte("playlist progress pages library goto sleep game audio sections art window urls sort catalogue ratings later\n"), 0o644)
+	os.WriteFile(f, []byte("playlist progress pages library goto sleep game audio sections art window urls sort catalogue ratings signin later\n"), 0o644)
 	want := Caps{Playlist: true, Progress: true, Library: true, Pages: true, Goto: true, Sleep: true,
-		Sections: true, Art: true, Window: true, Sort: true, Catalogue: true, Ratings: true}
+		Sections: true, Art: true, Window: true, Sort: true, Catalogue: true, Ratings: true, Signin: true}
 	if got := ReadCaps(f); got != want {
 		t.Errorf("got %+v, want %+v", got, want)
 	}

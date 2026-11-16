@@ -2628,3 +2628,35 @@ func TestSyncPageAfterFetches(t *testing.T) {
 		t.Errorf("%d timing lines in the log:\n%s", n, b)
 	}
 }
+
+// On Q2 Pod with "signin" the action opens the QR page with no toast, and the sign-in stops when
+// the page's marker goes after it was there, not on a gap in the menu's refresh (the screen off).
+func TestSigninQRPageMarker(t *testing.T) {
+	d := newTestDaemon(t, &nav{}, "signin", false)
+	if r := d.do("signin"); r.Message != "" || !d.signin.active() {
+		t.Fatalf("%+v", r)
+	}
+	d.tick()
+	if !d.signin.active() {
+		t.Fatal("stopped before the page opened")
+	}
+	marker := filepath.Join(d.tmp, "q2-subsonic.qrpage")
+	os.WriteFile(marker, nil, 0o644)
+	d.tick()
+	d.mu.Lock()
+	d.lastMenu = time.Now().Add(-10 * qrLeftAfter) // the screen was off: no refresh for a while
+	d.mu.Unlock()
+	if r := d.do("menu"); !d.signin.active() || r.Rows[0].Kind != "remote" {
+		t.Fatalf("a gap stopped it: %+v", r.Rows[0])
+	}
+	d.tick()
+	os.Remove(marker)
+	d.tick()
+	if d.signin.active() {
+		t.Fatal("still listening after the page was left")
+	}
+	// without the word, the action toasts as before
+	if r := newTestDaemon(t, &nav{}, "", false).do("signin"); r.Message != "Press again for the QR code" {
+		t.Fatalf("%+v", r)
+	}
+}
