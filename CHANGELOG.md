@@ -6,6 +6,8 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ## [Unreleased]
 
+## [0.9] - 2026-11-16
+
 ### Added
 
 - Sign in from your phone, redesigned: one press opens the QR code; scanning it opens the form with no PIN to type (an address typed by hand asks for the PIN first). The page is dark with grouped fields, says what went wrong under the field it concerns (an `http://` address, a server the Q2 can't reach, one only on Tailscale), cuts a pasted `/rest/…` path off the address, and fills in the last server you signed in to. The Q2 follows the phone: **Continue on Your Phone**, **Signing In…**, **Signed In**, or why it failed. Requires a Q2 Pod with the `signin` extension for the one press and the Q2's pages; on older Q2 Pod the row takes two presses and the QR page shows the outcome beside the code, as before.
@@ -136,7 +138,8 @@ First release. It needs Q2 Pod with card apps and a Subsonic or OpenSubsonic ser
 - Passwords, tokens, API keys and a `user:password@` in the server address never reach `log.txt` or the Account page.
 - The app changes only `Subsonic/`, the playlist files it wrote and `.subsonic/`, and deletes only what a sync put there, after the downloads have finished.
 
-[Unreleased]: https://github.com/andsuor/q2-subsonic/compare/q2-v0.8...HEAD
+[Unreleased]: https://github.com/andsuor/q2-subsonic/compare/q2-v0.9...HEAD
+[0.9]: https://github.com/andsuor/q2-subsonic/compare/q2-v0.8...q2-v0.9
 [0.8]: https://github.com/andsuor/q2-subsonic/compare/q2-v0.7...q2-v0.8
 [0.7]: https://github.com/andsuor/q2-subsonic/compare/q2-v0.6...q2-v0.7
 [0.6]: https://github.com/andsuor/q2-subsonic/compare/q2-v0.5...q2-v0.6
