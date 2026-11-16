@@ -774,6 +774,49 @@ func TestStateHoldDuringSync(t *testing.T) {
 	}
 }
 
+// The state file's sync= for Q2 Pod's status row: "down DONE TOTAL" while songs download, "check"
+// while a sync's check or the Server Library's checks ask the server, and no key while idle.
+func TestStateSyncSaysWhatTheAppSyncs(t *testing.T) {
+	n := &nav{albums: 1, songsPer: 2, block: make(chan struct{})}
+	d := newTestDaemon(t, n, "", true)
+	state := func() string {
+		d.tick()
+		b, _ := os.ReadFile(filepath.Join(d.tmp, "q2-subsonic.state"))
+		return string(b)
+	}
+	if st := state(); strings.Contains(st, "sync=") {
+		t.Fatalf("idle state:\n%s", st)
+	}
+	d.mu.Lock()
+	d.daemon.preview = &preview{gen: d.gen}
+	d.mu.Unlock()
+	if st := state(); !strings.Contains(st, "sync=check\n") {
+		t.Fatalf("state while checking:\n%s", st)
+	}
+	d.mu.Lock()
+	d.daemon.preview = nil
+	d.mu.Unlock()
+	d.sl.checking.Store(true)
+	if st := state(); !strings.Contains(st, "sync=check\n") {
+		t.Fatalf("state while the Server Library checks:\n%s", st)
+	}
+	d.sl.checking.Store(false)
+	d.do("toggle", "album:al0")
+	d.preview(t)
+	if r := d.do("start"); r.Status != "" && r.Status != q2spot.OK {
+		t.Fatalf("start: %+v", r)
+	}
+	eventually(t, "the sync to run", d.runner.Busy)
+	if st := state(); !regexp.MustCompile(`(?m)^sync=down \d+ [1-9]\d*$`).MatchString(st) {
+		t.Fatalf("state during sync:\n%s", st)
+	}
+	close(n.block)
+	eventually(t, "the sync to finish", func() bool { return d.runner.Snapshot().State == "done" })
+	if st := state(); strings.Contains(st, "sync=") {
+		t.Fatalf("sync= kept after the sync:\n%s", st)
+	}
+}
+
 // A fast failure while the preview is still starting its workers (run with -race).
 func TestPreviewFailsFastWithoutRace(t *testing.T) {
 	d := newTestDaemon(t, &nav{albums: 40, songsPer: 1, failID: "al0", failCode: 10}, "", true)

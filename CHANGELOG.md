@@ -6,6 +6,10 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ## [Unreleased]
 
+### Added
+
+- The Q2's status bar shows when the app is busy with your server: turning arrows while it checks the server or your library, and a ring filling up while a sync downloads songs. Requires a Q2 Pod that shows it (its status row's sync indicator); an older one ignores it.
+
 ## [0.9] - 2026-11-16
 
 ### Added
