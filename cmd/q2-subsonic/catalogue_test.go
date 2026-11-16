@@ -540,6 +540,72 @@ func TestPlaylistCovers(t *testing.T) {
 	}
 }
 
+// A playlist's collage changes with its songs, and Navidrome names each one anew (pl-<id>_<stamp>):
+// a new coverArt id fetches pl-<id>.jpg again, and one the server had no picture for is asked
+// again once its id changes.
+func TestPlaylistCoverFollowsItsCoverArtID(t *testing.T) {
+	r := newCatRig(t, "catalogue", fakesonic.Library(3))
+	old, collage := testJPEG(t, 160), testJPEG(t, 120)
+	r.f.Mu.Lock()
+	r.f.Playlists = []fakesonic.Playlist{{ID: "p1", Name: "Mix", Changed: "t1", CoverArt: "pl-p1_5", SIDs: []string{"s1"}},
+		{ID: "p2", Name: "New", Changed: "t1", CoverArt: "pl-p2_1", SIDs: []string{"s2"}}}
+	r.f.Covers = map[string][]byte{"pl-p1_5": old} // none yet for p2's
+	r.f.Mu.Unlock()
+	batteryStatus = filepath.Join(r.tmp, "battery")
+	t.Cleanup(func() { batteryStatus = "/sys/class/power_supply/battery/status" })
+	os.WriteFile(batteryStatus, []byte("Charging\n"), 0o644)
+	r.check(t) // the first copy
+	r.check(t) // the covers' round
+	p1, p2 := filepath.Join(r.dir, catalogue.CoversName, "pl-p1.jpg"), filepath.Join(r.dir, catalogue.CoversName, "pl-p2.jpg")
+	px := func(path string) int { // the cover's width: the collages are 160 and 120 px
+		f, err := os.Open(path)
+		if err != nil {
+			return 0
+		}
+		defer f.Close()
+		c, err := jpeg.DecodeConfig(f)
+		if err != nil {
+			return -1
+		}
+		return c.Width
+	}
+	if n := px(p1); n != 160 {
+		t.Fatal("no first collage", n, r.f.Calls)
+	}
+	if _, err := os.Stat(p2); err == nil {
+		t.Fatal("a cover the server hasn't")
+	}
+	asked := func() int {
+		r.f.Mu.Lock()
+		defer r.f.Mu.Unlock()
+		return r.f.Calls["getCoverArt"]
+	}
+	before := asked()
+	r.f.Mu.Lock()
+	r.f.Playlists[0].Changed, r.f.Playlists[0].CoverArt = "t2", "pl-p1_6"
+	r.f.Playlists[1].Changed, r.f.Playlists[1].CoverArt = "t2", "pl-p2_2"
+	r.f.Covers = map[string][]byte{"pl-p1_6": collage, "pl-p2_2": collage}
+	r.f.Mu.Unlock()
+	r.sl.mu.Lock()
+	r.sl.up = -1
+	r.sl.mu.Unlock()
+	r.check(t) // the playlists read again on the connection
+	r.check(t) // the covers' round
+	if n := px(p1); n != 120 {
+		t.Fatal("the old collage kept", n)
+	}
+	if n := px(p2); n != 120 {
+		t.Fatal("a playlist once without a cover never asked again", n)
+	}
+	if n := asked(); n != before+2 {
+		t.Fatalf("getCoverArt asked %d times for the two new ids, want 2", n-before)
+	}
+	r.check(t) // nothing new: nothing asked
+	if n := asked(); n != before+2 {
+		t.Fatalf("getCoverArt asked %d more times with no id changed", n-before-2)
+	}
+}
+
 func TestCoversWhileAListPlays(t *testing.T) {
 	r := newCatRig(t, "catalogue", fakesonic.Library(30)) // ten albums
 	r.f.Mu.Lock()

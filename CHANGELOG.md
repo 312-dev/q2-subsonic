@@ -10,6 +10,10 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 - The Q2's status bar shows when the app is busy with your server: turning arrows while it checks the server or your library, and a ring filling up while a sync downloads songs. Requires a Q2 Pod that shows it (its status row's sync indicator); an older one ignores it.
 
+### Fixed
+
+- With Show in Library, a server playlist's cover on the Q2 follows the playlist: when its songs change and Navidrome makes it a new cover, the app fetches the new one instead of keeping the first, and a playlist that had no cover gets one once the server makes it.
+
 ## [0.9] - 2026-11-16
 
 ### Added

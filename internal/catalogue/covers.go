@@ -22,7 +22,9 @@ import (
 // The folder is bounded: its files, each counted in whole clusters of the card, stay within
 // Budget, and none is written while the card has less than CoverFloor free. An album the server has
 // no cover for is noted in covers/.none and not asked again until Sign Out; a cover whose album
-// leaves the catalogue is deleted (Plan).
+// leaves the catalogue is deleted (Plan). A playlist's cover is kept with the coverArt id it was
+// fetched by (covers/.art), as Navidrome names each new collage anew: a new id fetches it again,
+// and a playlist noted without one is asked again under its new id.
 type Covers struct {
 	Card, Dir string
 	Budget    int64 // 0: CoverBudget
@@ -35,6 +37,7 @@ const (
 	CoverBudget = 256 << 20  // of the card for the folder, in clusters
 	CoverFloor  = 1024 << 20 // the card's free space below which no cover is written
 	noneName    = ".none"
+	artName     = ".art" // "<file id> <coverArt id>" a line, for each cover fetched by an Art id
 )
 
 // Album is one album of the catalogue, or a playlist's cover (PlaylistCovers): ID names its file,
@@ -109,6 +112,7 @@ type CoverPass struct {
 	Todo       []string
 	c          Covers
 	used, unit int64
+	art, saved map[string]string // the coverArt id each file is asked by; and was fetched by (.art)
 }
 
 // Plan deletes the covers of albums no longer in albums (and any file that is not a cover), and
@@ -126,7 +130,7 @@ func (c Covers) Plan(albums []Album) (*CoverPass, error) {
 	for _, a := range albums {
 		want[a.ID] = true
 	}
-	none := c.none()
+	none, arts := c.none(), c.arts()
 	unit, _ := c.cluster()
 	var used int64
 	have := map[string]bool{}
@@ -138,7 +142,7 @@ func (c Covers) Plan(albums []Album) (*CoverPass, error) {
 		name := e.Name()
 		id, isCover := strings.CutSuffix(name, ".jpg")
 		switch {
-		case name == noneName:
+		case name == noneName, name == artName:
 		case isCover && want[id] && e.Type().IsRegular():
 			if info, err := e.Info(); err == nil {
 				used += clusters(info.Size(), unit)
@@ -148,10 +152,16 @@ func (c Covers) Plan(albums []Album) (*CoverPass, error) {
 			os.RemoveAll(filepath.Join(c.Dir, name))
 		}
 	}
-	p := &CoverPass{c: c, used: used, unit: unit}
+	p := &CoverPass{c: c, used: used, unit: unit, art: map[string]string{}, saved: map[string]string{}}
 	room := used
 	for _, a := range albums {
-		if have[a.ID] || none[a.ID] {
+		if a.Art != "" {
+			p.art[a.ID] = a.Art
+			if have[a.ID] && arts[a.ID] != "" {
+				p.saved[a.ID] = arts[a.ID]
+			}
+		}
+		if have[a.ID] && arts[a.ID] == a.Art || none[noteKey(a.ID, a.Art)] {
 			continue
 		}
 		if room+unit > c.budget() {
@@ -161,6 +171,28 @@ func (c Covers) Plan(albums []Album) (*CoverPass, error) {
 		p.Todo = append(p.Todo, a.ID)
 	}
 	return p, nil
+}
+
+// noteKey is how .none notes id: with the coverArt id it was asked by, when it has one.
+func noteKey(id, art string) string {
+	if art != "" {
+		return id + " " + art
+	}
+	return id
+}
+
+// arts is .art: each cover fetched by a coverArt id, and that id.
+func (c Covers) arts() map[string]string {
+	out := map[string]string{}
+	lines(filepath.Join(c.Dir, artName), nil, func(l string) error { return addArt(out, l) })
+	return out
+}
+
+func addArt(m map[string]string, line string) error {
+	if id, art, ok := strings.Cut(strings.TrimSpace(line), " "); ok && id != "" && art != "" {
+		m[id] = art
+	}
+	return nil
 }
 
 // none is the albums noted as having no cover.
@@ -205,13 +237,34 @@ func (p *CoverPass) Save(id string, b []byte) error {
 		return err
 	}
 	p.used += size
+	if art := p.art[id]; art != "" {
+		p.saved[id] = art
+		return p.writeArts()
+	}
 	return nil
+}
+
+// writeArts writes .art whole: the covers of this pass's albums with their coverArt ids.
+func (p *CoverPass) writeArts() error {
+	f, err := create(p.c.Card, filepath.Join(p.c.Dir, artName))
+	if err != nil {
+		return err
+	}
+	ids := make([]string, 0, len(p.saved))
+	for id := range p.saved {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		f.WriteString(id + " " + p.saved[id] + "\n")
+	}
+	return f.commit()
 }
 
 // Used is the folder's size in the card's clusters.
 func (p *CoverPass) Used() int64 { return p.used }
 
-// None notes that the server has no cover for album id.
+// None notes that the server has no cover for album id (a playlist's: under its coverArt id).
 func (p *CoverPass) None(id string) error {
 	c := p.c
 	if !coverID(id) {
@@ -225,7 +278,7 @@ func (p *CoverPass) None(id string) error {
 	if err != nil {
 		return err
 	}
-	_, err = f.WriteString(id + "\n")
+	_, err = f.WriteString(noteKey(id, p.art[id]) + "\n")
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
