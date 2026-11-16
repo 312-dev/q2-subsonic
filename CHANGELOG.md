@@ -9,6 +9,7 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 ### Added
 
 - The Q2's status bar shows when the app is busy with your server: turning arrows while it checks the server or your library, and a ring filling up while a sync downloads songs. Requires a Q2 Pod that shows it (its status row's sync indicator); an older one ignores it.
+- With Show in Library, album covers in the car are sharp: once the Q2 has every album's cover, the app also fetches each at 512 pixels (into `.subsonic/covers/512/`, at most 256 MB), which the Q2 Muse's Car Remote sends to the car instead of the small one. Requires a Q2 Muse whose Car Remote sends them; an older one keeps sending the small covers.
 
 ## [0.9] - 2026-11-16
 

@@ -191,12 +191,19 @@ func (d *daemon) covers() catalogue.Covers {
 	return catalogue.Covers{Card: d.card, Dir: filepath.Join(d.dir, catalogue.CoversName)}
 }
 
+// bigCovers is the car's set, covers/512 (catalogue.BigName).
+func (d *daemon) bigCovers() catalogue.Covers {
+	return catalogue.Covers{Card: d.card, Dir: filepath.Join(d.dir, catalogue.CoversName, catalogue.BigName),
+		Px: catalogue.BigPx, Body: catalogue.BigBody}
+}
+
 // slCovers is a round of the catalogue's album covers (catalogue.Covers): while the app's network
 // is quiet (slQuiet) or the Q2 charges, and the server answers, the albums the folder lacks are
 // asked for, slCoverConc at a time and for slCoverPass at most, through the network slot a sync or
 // a stream takes first. What was saved stays, so the next round, a minute on, goes on from there.
 // A cover the server says it hasn't is noted and not asked again; a lost server ends the round,
-// and so does a sync starting or a song of the stream to fetch.
+// and so does a sync starting or a song of the stream to fetch. Once the 160 px set has nothing
+// left to fetch, the rounds fetch the car's 512 px set (bigCovers) the same way.
 func (d *daemon) slCovers(cl *subsonic.Client) {
 	if !d.slQuiet() && !charging() {
 		return
@@ -215,7 +222,12 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 			art[a.ID] = a.Art
 		}
 	}
-	pass, err := d.covers().Plan(albums)
+	cv := d.covers()
+	pass, err := cv.Plan(albums)
+	if err == nil && len(pass.Todo) == 0 { // the Q2's own all there: the car's larger ones
+		cv = d.bigCovers()
+		pass, err = cv.Plan(albums)
+	}
 	if err != nil || len(pass.Todo) == 0 {
 		if err != nil {
 			d.slFail("covers", err)
@@ -239,7 +251,7 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 				if a := art[id]; a != "" {
 					ask = a
 				}
-				jpg, err := d.fetchCover(ctx, cl, ask)
+				jpg, err := d.fetchCover(ctx, cl, ask, cv)
 				mu.Lock()
 				var ae *subsonic.APIError
 				switch {
@@ -274,7 +286,7 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 	}
 	close(ids)
 	wg.Wait()
-	d.log.Printf("server library: covers: %d saved, %d without, %d left, %d KiB in %v", saved, none,
+	d.log.Printf("server library: covers (%d px): %d saved, %d without, %d left, %d KiB in %v", cv.Side(), saved, none,
 		len(pass.Todo)-saved-none, pass.Used()>>10, time.Since(start).Round(time.Millisecond))
 	if lost != nil && subsonic.ConnectionLost(lost) {
 		d.slServer(lost)
@@ -283,8 +295,8 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 	}
 }
 
-// fetchCover is album id's cover from the server, CoverPx a side, as a baseline JPEG.
-func (d *daemon) fetchCover(ctx context.Context, cl *subsonic.Client, id string) ([]byte, error) {
+// fetchCover is album id's cover from the server, cv's side at most, as a baseline JPEG.
+func (d *daemon) fetchCover(ctx context.Context, cl *subsonic.Client, id string, cv catalogue.Covers) ([]byte, error) {
 	if err := syncer.Net.Acquire(ctx, false); err != nil {
 		return nil, err
 	}
@@ -293,19 +305,19 @@ func (d *daemon) fetchCover(ctx context.Context, cl *subsonic.Client, id string)
 	quiet.Log = nil // a line per cover would push the walk's history out of log.txt
 	ctx, cancel := context.WithTimeout(ctx, slCoverIn)
 	defer cancel()
-	resp, err := quiet.Get(ctx, quiet.CoverURLSize(id, catalogue.CoverPx), 0)
+	resp, err := quiet.Get(ctx, quiet.CoverURLSize(id, cv.Side()), 0)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	b, err := io.ReadAll(io.LimitReader(resp.Body, catalogue.CoverBody+1))
+	b, err := io.ReadAll(io.LimitReader(resp.Body, int64(cv.MaxBody())+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(b) > catalogue.CoverBody {
+	if len(b) > cv.MaxBody() {
 		return nil, errNoCover
 	}
-	return baselineMax(b, catalogue.CoverPx)
+	return baselineMax(b, cv.Side())
 }
 
 // slServer records what an answer (or none) says of the server and writes it to the state file:

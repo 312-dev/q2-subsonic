@@ -43,7 +43,7 @@ type Server struct {
 	NoEmpty   bool  // the empty query finds nothing, as on a server that doesn't take it
 	Calls     map[string]int
 	Writes    []string          // "setRating s1 3", "star s1", "unstar s1", "createPlaylist p1 s1,s2", "updatePlaylist p1 name=x add=s3", "deletePlaylist p1"
-	Covers    map[string][]byte // getCoverArt's picture by id; an id not here is error 70
+	Covers    map[string][]byte // getCoverArt's picture by id, or by "<id>@<size>" for that size alone; an id not here is error 70
 }
 
 // New starts a TLS server with user u and password "pw".
@@ -219,7 +219,10 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		ok(map[string]any{})
 	case "getCoverArt":
-		b, have := f.Covers[q.Get("id")]
+		b, have := f.Covers[q.Get("id")+"@"+q.Get("size")]
+		if !have {
+			b, have = f.Covers[q.Get("id")]
+		}
 		if !have {
 			fail(70, "Artwork not found")
 			return

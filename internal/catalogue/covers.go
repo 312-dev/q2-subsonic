@@ -23,9 +23,31 @@ import (
 // Budget, and none is written while the card has less than CoverFloor free. An album the server has
 // no cover for is noted in covers/.none and not asked again until Sign Out; a cover whose album
 // leaves the catalogue is deleted (Plan).
+//
+// The same albums' covers at BigPx are a second Covers, Dir covers/512 (BigName), with its own
+// budget and notes: the car remote sends them when the phone asks for more than CoverPx, as the
+// 160 px ones look soft on a car's screen. They are fetched once the 160 px set has nothing left
+// to fetch, and the Q2 itself never draws them (its rows decode a cover whole on its UI thread).
 type Covers struct {
 	Card, Dir string
 	Budget    int64 // 0: CoverBudget
+	Px, Body  int   // a cover's side and the server's bytes at most; 0: CoverPx, CoverBody
+}
+
+// Side is the largest a cover of c is, either way.
+func (c Covers) Side() int {
+	if c.Px > 0 {
+		return c.Px
+	}
+	return CoverPx
+}
+
+// MaxBody is the most bytes the server may send for one of c's covers.
+func (c Covers) MaxBody() int {
+	if c.Body > 0 {
+		return c.Body
+	}
+	return CoverBody
 }
 
 const (
@@ -35,6 +57,10 @@ const (
 	CoverBudget = 256 << 20  // of the card for the folder, in clusters
 	CoverFloor  = 1024 << 20 // the card's free space below which no cover is written
 	noneName    = ".none"
+
+	BigName = "512"     // covers/512/: the same covers at BigPx, for the car (Q2 Muse's coda-rc)
+	BigPx   = 512       // a cover's side at most there
+	BigBody = 256 << 10 // a 512 px cover's bytes at most as the server sends it
 )
 
 // Album is one album of the catalogue, or a playlist's cover (PlaylistCovers): ID names its file,
@@ -138,7 +164,7 @@ func (c Covers) Plan(albums []Album) (*CoverPass, error) {
 		name := e.Name()
 		id, isCover := strings.CutSuffix(name, ".jpg")
 		switch {
-		case name == noneName:
+		case name == noneName, name == BigName && e.IsDir(): // covers/512: a Covers of its own
 		case isCover && want[id] && e.Type().IsRegular():
 			if info, err := e.Info(); err == nil {
 				used += clusters(info.Size(), unit)
