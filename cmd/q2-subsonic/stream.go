@@ -24,7 +24,9 @@ import (
 	"github.com/andsuor/q2-subsonic/internal/syncer"
 )
 
-const streamWindow = 2 // songs fetched ahead of, and kept behind, the one playing
+// streamWindow is the songs kept behind the one playing, and fetched ahead of it when the firmware
+// sends no .ahead (Download Ahead, ahead.go).
+const streamWindow = 2
 
 type streamSource interface {
 	PlayURL(id, quality string) string
@@ -35,8 +37,8 @@ type streamSource interface {
 // pingIn is how long the server has to answer the ping that tells a lost server from one bad song.
 const pingIn = 10 * time.Second
 
-// streamer plays a list by fetching songs a couple ahead of .playing into the hidden stream
-// folder and telling the firmware what to play through .play. Streamed files never go in the manifest.
+// streamer plays a list by fetching the songs after .playing (plan: the firmware's .ahead, or a
+// couple in list order) into the hidden stream folder and telling the firmware what to play through .play. Streamed files never go in the manifest.
 type streamer struct {
 	root, playFile, playingFile string // root is the card (/mnt/mmc)
 	caps                        fw.Caps
@@ -82,6 +84,17 @@ type streamer struct {
 	err   *streamErr
 
 	xfer atomic.Bool // a song of the window is still to fetch (busy)
+
+	// Download Ahead (ahead.go): the firmware's .ahead and the app's .stream, both "" without the
+	// files; .stream's pace while a song arrives, and when one with no byte reads stall.
+	aheadFile, statusFile string
+	// retryFile is Now Playing's Retry (/tmp/q2-<id>.retry): a song waiting out its backoff or a
+	// lost server is tried again at once. "" without it.
+	retryFile               string
+	statusEvery, stallAfter time.Duration
+	gmu                     sync.Mutex
+	growing                 map[string]bool // songs arriving in place ("grow"), as .growing lists them
+	pmu                     sync.Mutex      // the run's progress, and .stream's writes
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -158,6 +171,9 @@ func (s *streamer) stop() {
 	s.stopLocked()
 	s.plays.clear() // no play goes to another account
 	s.setErr(nil)
+	if s.statusFile != "" {
+		os.Remove(s.statusFile) // nothing streams: the firmware shows no song loading
+	}
 }
 
 func (s *streamer) stopLocked() {
@@ -189,6 +205,7 @@ func (s *streamer) playingNow() (string, time.Time) {
 // clean empties the stream folder of its files: a new list, or a daemon start, leaves no uncached
 // songs or queue from an older one on the card (M26). The cache's folders stay.
 func (s *streamer) clean() {
+	s.dropGrowing()
 	ents, _ := os.ReadDir(s.dir())
 	for _, e := range ents {
 		if !e.IsDir() {
@@ -206,6 +223,7 @@ func (s *streamer) clean() {
 // ponytail: the songs' lengths aren't known here, so an hour stands for the one playing; read the
 // length from the file if a longer one that still plays loses the songs after its window to a clear.
 func (s *streamer) cleanLeft() {
+	s.dropGrowing()
 	s.protect(nil)
 	if p, at := s.playingNow(); p != "" && exists(p) {
 		q := s.lastQueue()
@@ -234,6 +252,7 @@ type job struct {
 	next    time.Time // no try before
 	landed  bool      // fetched once in this run: the firmware may have passed it
 	away    bool      // the server was lost at it: tried on until it answers or the list is left
+	failed  bool      // it ended the run (.stream's fail)
 }
 
 // synced reports whether e's file can play from the card: it is there, and no sync is about to
@@ -321,7 +340,7 @@ func (s *streamer) startRun(songs []subsonic.Song, paths []string, from int, cat
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel, s.done = cancel, make(chan struct{})
 	r := &streamRun{s: s, ctx: ctx, songs: slices.Clone(songs), jobs: jobs, from: from, last: from, seq: seq,
-		stale: stale, staleAt: staleAt, heard: staleAt, playSeq: seq, refill: refill}
+		stale: stale, staleAt: staleAt, heard: staleAt, playSeq: seq, refill: refill, prog: progress{job: -1}}
 	if cat != nil {
 		r.cat, r.playSeq = true, cat.seq
 	}
@@ -360,6 +379,7 @@ type streamRun struct {
 	playSeq   int64                  // the seq .play names: seq, or the .catplay's it answers
 	refill    func() []subsonic.Song // a radio's: more songs for its end (startRadio); nil for any other list
 	refillAt  time.Time              // no ask for more before, after one that brought none
+	prog      progress               // the download running now, for .stream (s.pmu)
 }
 
 // jobFor is how song sg, the list's i-th, plays: from the card when it is synced, from the stream
@@ -553,7 +573,7 @@ func (r *streamRun) dropUncached(i int, e *streamErr) (goOn, skipped bool) {
 	}
 	n := len(r.jobs)
 	for k := len(r.jobs) - 1; k >= i; k-- {
-		if r.jobs[k].fetch && !exists(r.jobs[k].path) {
+		if r.jobs[k].fetch && !r.s.whole(r.jobs[k].path) {
 			r.jobs, r.songs = slices.Delete(r.jobs, k, k+1), slices.Delete(r.songs, k, k+1)
 		}
 	}
@@ -607,6 +627,7 @@ func (r *streamRun) run() {
 	seen, since := "", time.Now() // .playing as read last, and since when
 	read := time.Now()            // when .playing was read last
 	for r.ctx.Err() == nil {
+		r.takeRetry()
 		cur, now, at := r.current()
 		// A start seen now is no older than the last read, whatever the file's time says: the
 		// clock may have been set meanwhile.
@@ -640,13 +661,15 @@ func (r *streamRun) run() {
 		if lo := max(r.from, cur-streamWindow); lo != r.keptLo || len(r.jobs) != r.keptN { // the song changed, or one was skipped
 			r.protect(lo, len(r.jobs))
 		}
-		want := -1 // the first song of the window still to fetch
-		for i := cur; i < len(r.jobs) && i <= cur+streamWindow; i++ {
-			if j := r.jobs[i]; j.fetch && !exists(j.path) {
+		plan := r.plan(cur)
+		want := -1 // the first song of the plan still to fetch
+		for _, i := range plan {
+			if j := r.jobs[i]; j.fetch && !r.s.whole(j.path) {
 				want = i
 				break
 			}
 		}
+		r.status(plan, -1)
 		// Waiting for a lost server is no transfer: it must not keep the Q2 from standby.
 		r.s.xfer.Store(want >= 0 && !r.jobs[want].away)
 		r.quietBy = since.Add(idle + time.Duration(r.songs[cur].Duration)*time.Second)
@@ -655,7 +678,9 @@ func (r *streamRun) run() {
 			continue // the window and the run's end are looked at again with the new songs
 		}
 		if want >= 0 && !time.Now().Before(r.jobs[want].next) { // else backing off
-			if err := r.fetch(r.songs[want], r.jobs[want]); err == nil {
+			if err, replanned := r.fetchWatched(want); replanned {
+				continue // the song left the plan while it arrived: its file is gone, plan again
+			} else if err == nil {
 				if r.jobs[want].away { // the server is back
 					r.jobs[want].away = false
 					r.s.setErr(nil)
@@ -664,6 +689,10 @@ func (r *streamRun) run() {
 			} else if r.ctx.Err() != nil {
 				return
 			} else if goOn, skipped := r.failed(want, err); !goOn {
+				if want < len(r.jobs) {
+					r.jobs[want].failed = true
+					r.status(plan, -1)
+				}
 				return
 			} else if skipped {
 				continue // the list changed under cur; and the firmware waits for the next song now
@@ -695,33 +724,97 @@ func (r *streamRun) run() {
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
 
-// fetch downloads one song to <final>.part, syncs it and renames it, holding the network slot
-// with priority so it goes before the syncer's next file. Originals come through PlayURL, which
-// servers allow when downloads are turned off (M27, R37).
-func (r *streamRun) fetch(sg subsonic.Song, j job) error {
+// fetchWatched fetches job i while a watcher reads the plan again and writes .stream at its pace:
+// a song that leaves the plan meanwhile (another song playing, a new .ahead) is cancelled, and
+// replanned says so, its file already deleted by fetch.
+func (r *streamRun) fetchWatched(i int) (err error, replanned bool) {
+	ctx, cancel := context.WithCancel(r.ctx)
+	defer cancel()
+	r.s.pmu.Lock()
+	r.prog.job, r.prog.have, r.prog.total, r.prog.movedAt = i, 0, 0, time.Now()
+	r.s.pmu.Unlock()
+	left := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tick := time.NewTicker(min(r.s.poll, cmpOr(r.s.statusEvery, statusEvery)))
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+			cur, _, _ := r.current()
+			plan := r.plan(cur)
+			if !slices.Contains(plan, i) {
+				close(left)
+				cancel()
+				return
+			}
+			r.status(plan, i)
+		}
+	}()
+	err = r.fetch(ctx, r.songs[i], r.jobs[i])
+	cancel()
+	<-done
+	r.s.pmu.Lock()
+	r.prog.job = -1
+	r.s.pmu.Unlock()
+	select {
+	case <-left:
+		if r.ctx.Err() == nil && err != nil {
+			r.s.logf("stream: %q left the plan while it arrived", r.songs[i].Title)
+			return err, true
+		}
+	default:
+	}
+	return err, false
+}
+
+// fetch downloads one song, holding the network slot with priority so it goes before the
+// syncer's next file: to <final>.part, synced and renamed, or with "grow" in place, listed in
+// .growing until it is whole. Originals come through PlayURL, which servers allow when downloads
+// are turned off (M27, R37).
+func (r *streamRun) fetch(ctx context.Context, sg subsonic.Song, j job) error {
 	s := r.s
 	if s.cacheCap != nil {
-		s.trim(r.ctx, expect(sg, j.quality), s.reserve())
+		s.trim(ctx, expect(sg, j.quality), s.reserve())
 	}
-	if err := s.net.Acquire(r.ctx, true); err != nil {
+	if err := s.net.Acquire(ctx, true); err != nil {
 		return err
 	}
 	defer s.net.Release()
-	resp, err := s.src.Get(r.ctx, s.src.PlayURL(sg.ID, j.quality), 0)
+	resp, err := s.src.Get(ctx, s.src.PlayURL(sg.ID, j.quality), 0)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	part := j.path + ".part"
+	// A cancel ends a read that waits: net/http's body does so itself, and any other is closed.
+	stopRead := context.AfterFunc(ctx, func() { resp.Body.Close() })
+	defer stopRead()
+	part, grow := j.path+".part", s.grows()
+	if grow {
+		part = j.path
+	}
 	if err := os.MkdirAll(filepath.Dir(part), 0o755); err != nil {
 		return err
+	}
+	if grow {
+		if err := s.setGrowing(j.path, true); err != nil {
+			return err
+		}
+		defer s.setGrowing(j.path, false) // after the file is whole, or deleted below
 	}
 	f, err := os.Create(part)
 	if err != nil {
 		return err
 	}
 	limit := syncer.Limit(resp.ContentLength, expect(sg, j.quality))
-	n, err := io.Copy(f, io.LimitReader(resp.Body, limit+1))
+	s.pmu.Lock()
+	r.prog.total = max(resp.ContentLength, 0)
+	s.pmu.Unlock()
+	n, err := io.Copy(io.MultiWriter(f, counter{r}), io.LimitReader(resp.Body, limit+1))
 	if err == nil {
 		err = syncer.SizeErr(n, resp.ContentLength, limit)
 	}
@@ -731,7 +824,7 @@ func (r *streamRun) fetch(sg subsonic.Song, j job) error {
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
-	if err == nil {
+	if err == nil && !grow {
 		err = os.Rename(part, j.path)
 	}
 	if err != nil {
@@ -756,4 +849,16 @@ func expect(sg subsonic.Song, quality string) int64 {
 		return max(sg.Size, int64(sg.Duration)*128000/8)
 	}
 	return sg.Size
+}
+
+// takeRetry takes Now Playing's Retry when the firmware has written it: every song still to fetch
+// is due now, its backoff or a lost server's wait cut short. The file goes, so one press is one try.
+func (r *streamRun) takeRetry() {
+	if r.s.retryFile == "" || os.Remove(r.s.retryFile) != nil {
+		return
+	}
+	r.s.logf("stream: retry asked")
+	for k := range r.jobs {
+		r.jobs[k].next = time.Time{}
+	}
 }

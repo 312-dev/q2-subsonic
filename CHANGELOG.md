@@ -9,8 +9,9 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 ### Added
 
 - Song radio: Now Playing's **Radio** on a song from your server starts an endless radio of songs like it (`getSimilarSongs2` with the song's id), the song playing on where it is. More songs are added when about 10 are left, and none played or queued lately (the last 200) comes back; the Q2's blue **Radio** pill lights while it plays, and a tap on it stops it, the queued songs playing on. An artist's **Radio** is endless the same way. Now Playing's Radio requires a Q2 Pod with the `radio` extension; an artist's Radio is endless on any.
-
 - The Q2's status bar shows when the app is busy with your server: turning arrows while it checks the server or your library, and a ring filling up while a sync downloads songs. Requires a Q2 Pod that shows it (its status row's sync indicator); an older one ignores it.
+- **Download Ahead:** while a list streams, the app downloads the songs the Q2 will play next, in the Q2's own order (shuffle and Up Next included), so a skip or the next song starts at once. How many (Off, 1, 2 or 3; 2 by default) is the Q2's **Streaming → Configuration → Download Ahead**; a song that leaves the plan while it downloads is dropped and the new next song fetched. The app also tells the Q2 how far each song has downloaded, which Now Playing shows while a song loads, and on a Q2 Muse whose player can play a song as it arrives, a song starts after a few seconds of it rather than once all of it is on the card. Requires a Q2 Muse with the `ahead` extension (and `grow` for the early start); on older firmware the app downloads the next two songs of the list, as before.
+- **Retry** on the Q2's Now Playing, when a song can't load because your server is out of reach, makes the app try that song again at once instead of at its next scheduled try. Requires a Q2 Muse that shows Retry; older firmware never asks.
 
 ## [0.9] - 2026-11-16
 
