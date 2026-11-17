@@ -6,6 +6,8 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ## [Unreleased]
 
+## [1.0] - 2026-11-16
+
 ### Added
 
 - Song radio: Now Playing's **Radio** on a song from your server starts an endless radio of songs like it (`getSimilarSongs2` with the song's id), the song playing on where it is. More songs are added when about 10 are left, and none played or queued lately (the last 200) comes back; the Q2's blue **Radio** pill lights while it plays, and a tap on it stops it, the queued songs playing on. An artist's **Radio** is endless the same way. Now Playing's Radio requires a Q2 Pod with the `radio` extension; an artist's Radio is endless on any.
@@ -150,7 +152,8 @@ First release. It needs Q2 Pod with card apps and a Subsonic or OpenSubsonic ser
 - Passwords, tokens, API keys and a `user:password@` in the server address never reach `log.txt` or the Account page.
 - The app changes only `Subsonic/`, the playlist files it wrote and `.subsonic/`, and deletes only what a sync put there, after the downloads have finished.
 
-[Unreleased]: https://github.com/andsuor/q2-subsonic/compare/q2-v0.9...HEAD
+[Unreleased]: https://github.com/andsuor/q2-subsonic/compare/q2-v1.0...HEAD
+[1.0]: https://github.com/andsuor/q2-subsonic/compare/q2-v0.9...q2-v1.0
 [0.9]: https://github.com/andsuor/q2-subsonic/compare/q2-v0.8...q2-v0.9
 [0.8]: https://github.com/andsuor/q2-subsonic/compare/q2-v0.7...q2-v0.8
 [0.7]: https://github.com/andsuor/q2-subsonic/compare/q2-v0.6...q2-v0.7
