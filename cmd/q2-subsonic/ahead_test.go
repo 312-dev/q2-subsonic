@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/andsuor/q2-subsonic/internal/fw"
+	"github.com/andsuor/q2-subsonic/internal/subsonic"
 )
 
 // aheadEnv is newEnv with the firmware's "ahead" word (and "grow" when asked), its .ahead and
@@ -294,5 +296,35 @@ func TestGrowingLeftByACrashIsDeleted(t *testing.T) {
 	}
 	if exists(filepath.Join(e.s.dir(), ".growing")) {
 		t.Error(".growing survived a start")
+	}
+}
+
+// Now Playing's Retry (the firmware's /tmp/q2-<id>.retry): a song waiting for a lost server is
+// tried again at once, not at the backoff's next try; the file is taken.
+func TestRetryTriesALostServerAgainNow(t *testing.T) {
+	e := aheadEnv(t, false)
+	e.s.retryFile = filepath.Join(filepath.Dir(e.play), "retry")
+	e.s.backoff = []time.Duration{time.Millisecond, time.Millisecond, time.Hour}
+	var back atomic.Bool
+	lost := errFor(&subsonic.APIError{Op: "stream", Msg: "network is unreachable"}, "s1")
+	e.src.err = func(u string) error {
+		if back.Load() {
+			return nil
+		}
+		return lost(u)
+	}
+	e.src.ping = func() error { return e.src.err("p:s1:") }
+	e.s.start(songs(3, "flac"), 0)
+	until(t, "waiting an hour", func() bool { return e.s.Err() != nil && e.src.tries("s1") >= 3 })
+	tries := e.src.tries("s1")
+	time.Sleep(30 * time.Millisecond)
+	if n := e.src.tries("s1"); n != tries {
+		t.Fatalf("tried %d more times before the hour", n-tries)
+	}
+	back.Store(true)
+	os.WriteFile(e.s.retryFile, []byte("1\n"), 0o644)
+	until(t, "s1 fetched", func() bool { return exists(e.stream(1, "flac")) })
+	if exists(e.s.retryFile) {
+		t.Error("the retry file was left")
 	}
 }

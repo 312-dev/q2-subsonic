@@ -83,7 +83,10 @@ type streamer struct {
 
 	// Download Ahead (ahead.go): the firmware's .ahead and the app's .stream, both "" without the
 	// files; .stream's pace while a song arrives, and when one with no byte reads stall.
-	aheadFile, statusFile   string
+	aheadFile, statusFile string
+	// retryFile is Now Playing's Retry (/tmp/q2-<id>.retry): a song waiting out its backoff or a
+	// lost server is tried again at once. "" without it.
+	retryFile               string
 	statusEvery, stallAfter time.Duration
 	gmu                     sync.Mutex
 	growing                 map[string]bool // songs arriving in place ("grow"), as .growing lists them
@@ -566,6 +569,7 @@ func (r *streamRun) run() {
 	seen, since := "", time.Now() // .playing as read last, and since when
 	read := time.Now()            // when .playing was read last
 	for r.ctx.Err() == nil {
+		r.takeRetry()
 		cur, now, at := r.current()
 		// A start seen now is no older than the last read, whatever the file's time says: the
 		// clock may have been set meanwhile.
@@ -781,4 +785,16 @@ func expect(sg subsonic.Song, quality string) int64 {
 		return max(sg.Size, int64(sg.Duration)*128000/8)
 	}
 	return sg.Size
+}
+
+// takeRetry takes Now Playing's Retry when the firmware has written it: every song still to fetch
+// is due now, its backoff or a lost server's wait cut short. The file goes, so one press is one try.
+func (r *streamRun) takeRetry() {
+	if r.s.retryFile == "" || os.Remove(r.s.retryFile) != nil {
+		return
+	}
+	r.s.logf("stream: retry asked")
+	for k := range r.jobs {
+		r.jobs[k].next = time.Time{}
+	}
 }
