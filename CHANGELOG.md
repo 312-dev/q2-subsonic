@@ -13,6 +13,10 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 - **Download Ahead:** while a list streams, the app downloads the songs the Q2 will play next, in the Q2's own order (shuffle and Up Next included), so a skip or the next song starts at once. How many (Off, 1, 2 or 3; 2 by default) is the Q2's **Streaming → Configuration → Download Ahead**; a song that leaves the plan while it downloads is dropped and the new next song fetched. The app also tells the Q2 how far each song has downloaded, which Now Playing shows while a song loads, and on a Q2 Muse whose player can play a song as it arrives, a song starts after a few seconds of it rather than once all of it is on the card. Requires a Q2 Muse with the `ahead` extension (and `grow` for the early start); on older firmware the app downloads the next two songs of the list, as before.
 - **Retry** on the Q2's Now Playing, when a song can't load because your server is out of reach, makes the app try that song again at once instead of at its next scheduled try. Requires a Q2 Muse that shows Retry; older firmware never asks.
 
+### Fixed
+
+- With Show in Library, a server playlist's cover on the Q2 follows the playlist: when its songs change and Navidrome makes it a new cover, the app fetches the new one instead of keeping the first, and a playlist that had no cover gets one once the server makes it.
+
 ## [0.9] - 2026-11-16
 
 ### Added
