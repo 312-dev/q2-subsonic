@@ -492,8 +492,9 @@ func TestCatalogueCovers(t *testing.T) {
 	if got := catLines(t, filepath.Join(dir, ".none")); !slices.Equal(sorted(got), []string{"al8", "al9"}) {
 		t.Fatal(got)
 	}
-	r.check(t)
-	if n := r.calls("getCoverArt"); n != 10 {
+	r.check(t) // the 160 px set done: the car's 512 px set asks each album once too
+	r.check(t) // then nothing is left to ask
+	if n := r.calls("getCoverArt"); n != 20 {
 		t.Fatal("getCoverArt calls:", n)
 	}
 	// Show in Library off: the covers go with the catalogue
@@ -600,9 +601,62 @@ func TestPlaylistCoverFollowsItsCoverArtID(t *testing.T) {
 	if n := asked(); n != before+2 {
 		t.Fatalf("getCoverArt asked %d times for the two new ids, want 2", n-before)
 	}
+	r.check(t) // the 160 px set whole: the car's 512 px round, 3 albums and 2 playlists
+	if n := asked(); n != before+2+5 {
+		t.Fatalf("getCoverArt asked %d times in the 512 px round, want 5", n-before-2)
+	}
 	r.check(t) // nothing new: nothing asked
-	if n := asked(); n != before+2 {
-		t.Fatalf("getCoverArt asked %d more times with no id changed", n-before-2)
+	if n := asked(); n != before+2+5 {
+		t.Fatalf("getCoverArt asked %d more times with no id changed", n-before-2-5)
+	}
+}
+
+// The car asks for covers bigger than the Q2 draws (Q2 Muse's coda-rc, max_px about 350): once
+// every 160 px cover is there, the next rounds fetch each at 512 px into covers/512/, its own
+// folder and budget, which the 160 px set's Plan leaves alone.
+func TestBigCoversAfterTheQ2s(t *testing.T) {
+	r := newCatRig(t, "catalogue", fakesonic.Library(3)) // al0 to al2
+	r.f.Mu.Lock()
+	r.f.Covers = map[string][]byte{}
+	for i := range 3 {
+		r.f.Covers[fmt.Sprintf("al%d@160", i)] = testJPEG(t, 160)
+		r.f.Covers[fmt.Sprintf("al%d@512", i)] = testJPEG(t, 512)
+	}
+	r.f.Mu.Unlock()
+	r.check(t) // the first copy and the catalogue
+	r.check(t) // the Q2's covers
+	dir := r.file(catalogue.CoversName)
+	width := func(path string) int {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return 0
+		}
+		cfg, err := jpeg.DecodeConfig(bytes.NewReader(b))
+		if err != nil || !bytes.HasPrefix(b, jfif) {
+			return -1
+		}
+		return cfg.Width
+	}
+	for i := range 3 {
+		if w := width(filepath.Join(dir, fmt.Sprintf("al%d.jpg", i))); w != 160 {
+			t.Fatalf("al%d: %d", i, w)
+		}
+		if w := width(filepath.Join(dir, catalogue.BigName, fmt.Sprintf("al%d.jpg", i))); w != 0 {
+			t.Fatalf("al%d's 512 px before the Q2's own were all there: %d", i, w)
+		}
+	}
+	r.check(t) // the car's
+	r.check(t) // nothing left: the 512s kept by the 160s' Plan
+	for i := range 3 {
+		if w := width(filepath.Join(dir, catalogue.BigName, fmt.Sprintf("al%d.jpg", i))); w != 512 {
+			t.Fatalf("al%d's 512 px: %d", i, w)
+		}
+		if w := width(filepath.Join(dir, fmt.Sprintf("al%d.jpg", i))); w != 160 {
+			t.Fatalf("al%d: %d", i, w)
+		}
+	}
+	if n := r.calls("getCoverArt"); n != 6 {
+		t.Fatal("getCoverArt calls:", n)
 	}
 }
 

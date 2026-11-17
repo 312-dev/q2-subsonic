@@ -18,7 +18,8 @@
 //	covers/               the catalogue's album covers, <album id>.jpg, and its playlists',
 //	                      pl-<playlist id>.jpg, within a budget (Covers); .none, the ones the
 //	                      server has none for, and .art, the coverArt id each playlist's was
-//	                      fetched by
+//	                      fetched by; covers/512/, the album covers at 512 px for the car,
+//	                      within a budget of its own
 //
 // No file holds the whole library in memory: songs are read and written a line at a time.
 package catalogue
