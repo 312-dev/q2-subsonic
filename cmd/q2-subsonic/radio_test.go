@@ -128,3 +128,23 @@ func TestRadioNeedsTheWord(t *testing.T) {
 		t.Fatal("answered without the word")
 	}
 }
+
+// Signed out, a server song's Radio is answered 3, not 1: 1 would send the firmware to a radio of its
+// library, whose "No similar songs" says nothing of the sign-in. A song that is not the server's is
+// still 1, and no request reaches the server.
+func TestRadioSignedOut(t *testing.T) {
+	n := &nav{albums: 4, songsPer: 6, simStep: true}
+	d := newTestDaemon(t, n, "playlist radio", true)
+	d.signOut()
+	d.ask("5 start " + d.streamed("al3.2"))
+	if got := d.stateKey("radioack"); got != "5 3" {
+		t.Fatalf("a server song, signed out: radioack=%q", got)
+	}
+	d.ask("6 start /mnt/mmc/Music/Someone/Song.flac")
+	if got := d.stateKey("radioack"); got != "6 1" {
+		t.Fatalf("a card song, signed out: radioack=%q", got)
+	}
+	if n.reqs("getSimilarSongs2") != 0 {
+		t.Fatal("the server was asked")
+	}
+}

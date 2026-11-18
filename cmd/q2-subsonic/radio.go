@@ -205,6 +205,10 @@ const (
 	radioStarted = 0 // the radio plays
 	radioNotOurs = 1 // the song is not a server song: the firmware plays a radio of its own library
 	radioFailed  = 2 // no radio: the server has none, no similar songs, or it can't be reached
+	// radioSignedOut: the song is the server's but nobody is signed in. A firmware that doesn't know
+	// the code treats any code above 1 as radioFailed and toasts that no radio is available; it
+	// does not fall back to its own library's radio, as it does on radioNotOurs.
+	radioSignedOut = 3
 )
 
 // radioTick answers the firmware's .radio request, "<seq> start <path>" (a radio of the song at
@@ -246,8 +250,12 @@ func (d *daemon) radioTick() {
 	}
 	id, keep := d.songOf(f[2])
 	cl := d.client()
-	if id == "" || cl == nil {
+	switch {
+	case id == "":
 		ack(radioNotOurs)
+		return
+	case cl == nil:
+		ack(radioSignedOut)
 		return
 	}
 	d.spawn(func() {

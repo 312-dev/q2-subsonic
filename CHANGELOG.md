@@ -6,6 +6,10 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ## [Unreleased]
 
+### Fixed
+
+- Now Playing's **Radio** on a server song while signed out no longer sends the Q2 to a radio of its own library (which could say "No similar songs"). The app answers that it is signed out (code 3 of the `.radio` ack); a firmware that doesn't know the code shows its "Radio isn't available for this song" toast.
+
 ## [1.0] - 2026-11-16
 
 ### Added
