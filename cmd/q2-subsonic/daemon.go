@@ -111,6 +111,14 @@ type stateKeys struct {
 	ack    string // radioack=: the last .radio request answered, "<seq> <code>"; "" none
 	lyrAck string // lyricsack=: the last .lrcask request answered, "<seq> <code>"; "" none
 	covAck string // coverack=: the last .coverask line answered, "<seq> <code>"; "" none
+	resAck string // resumeack=: the last .resume request answered, "<seq> <code>"; "" none
+}
+
+func (s *stateKeys) setResumeAck(v string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resAck = v
+	return s.flush()
 }
 
 func (s *stateKeys) setCoverAck(v string) error {
@@ -200,6 +208,9 @@ func (s *stateKeys) flush() error {
 	}
 	if s.covAck != "" {
 		m["coverack"] = s.covAck
+	}
+	if s.resAck != "" {
+		m["resumeack"] = s.resAck
 	}
 	return s.st.Write(m)
 }
@@ -324,6 +335,7 @@ type daemon struct {
 	radio              radioState       // the radio playing and its recent songs (radio.go)
 	lyr                lyricsState      // the firmware's lyrics requests (lyrics.go)
 	cov                coverAskState    // the car's cover requests (coverask.go)
+	resume             resumeState      // the firmware's request to resume a restored stream (resume.go)
 
 	bg sync.WaitGroup // the work replies leave running (ping, preview, play, sign-out's stops); tests wait for it
 }
@@ -408,6 +420,7 @@ func newDaemon(dir, card, tmp string) *daemon {
 	d.slInit()
 	d.radioInit()
 	d.lyricsInit()
+	d.resumeInit()
 	d.stream.played = d.radioPlayed
 	d.stream.started = func(radio bool) {
 		if !radio {
@@ -674,6 +687,7 @@ func (d *daemon) tick() {
 	d.radioTick()
 	d.lyricsTick()
 	d.coverTick()
+	d.resumeTick()
 	if d.caps.Library {
 		d.mu.Lock()
 		d.libPoll()
