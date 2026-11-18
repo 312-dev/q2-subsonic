@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -183,6 +187,35 @@ func TestStartScrubsLog(t *testing.T) {
 		}
 		if !strings.Contains(string(b), "u=***&v=1.13.0 -> 200") {
 			t.Fatalf("%s:\n%s", n, b)
+		}
+	}
+}
+
+// Every thread the app has, those the Go runtime starts after lowerPriority included, runs at
+// appNice.
+func TestLowerPriority(t *testing.T) {
+	if err := lowerPriority(); err != nil {
+		t.Skip("no /proc/self/task here:", err)
+	}
+	var wg sync.WaitGroup
+	for range 8 { // goroutines blocked in syscalls make the runtime start more threads
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			runtime.LockOSThread()
+			time.Sleep(20 * time.Millisecond)
+		}()
+	}
+	wg.Wait()
+	ents, _ := os.ReadDir("/proc/self/task")
+	for _, e := range ents {
+		b, err := os.ReadFile(filepath.Join("/proc/self/task", e.Name(), "stat"))
+		if err != nil {
+			continue // gone meanwhile
+		}
+		f := strings.Fields(string(b[bytes.LastIndexByte(b, ')')+1:]))
+		if len(f) > 16 && f[16] != strconv.Itoa(appNice) { // field 19, nice, counted from the state
+			t.Fatalf("thread %s nice %s", e.Name(), f[16])
 		}
 	}
 }
