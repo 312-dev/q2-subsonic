@@ -15,6 +15,10 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 - Starting Radio on the song that is playing no longer downloads that song a second time: the radio plays on from the file the app already has, or waits for the one still arriving, instead of fetching it again, which wasted data, card writes and CPU.
 - With Show in Library, the app no longer takes a burst of the Q2's CPU every minute while music plays: once every album cover it can fetch is on the card, it stops checking them until your library or the card changes, and a covers folder that is full no longer downloads a cover a minute only to throw it away. The car's 512 pixel covers are saved as the server sends them when they are already a plain JPEG, instead of being decoded and encoded again, which took most of the CPU while they download. The app also runs at a lower priority, so the Q2's player, Bluetooth and screens go first.
 
+### Security
+
+- Built with Go 1.27.4 instead of 1.22.2, which brings the app's copy of the Go standard library (TLS, HTTP, image and archive handling) up to date: a vulnerability scan of the app found 77 known issues in the old one and none in the new. The app is about 1.9 MB larger on the card (the zip grows from 2.9 MB to 3.6 MB).
+
 ## [1.0] - 2026-11-16
 
 ### Added

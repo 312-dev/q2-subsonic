@@ -121,7 +121,7 @@ To remove it, press **Subsonic** twice in **System settings → App Store**. On 
 
     contrib/shanlingq2/build.sh
 
-needs Go 1.22 or later and python3 (no dependencies outside Go's standard library), and leaves the card files in `target/shanlingq2/.subsonic` and the release ZIP beside them. More: [contrib/shanlingq2/README](contrib/shanlingq2/README).
+needs Go 1.22 or later (go.mod pins the toolchain, fetched on first use) and python3 (no dependencies outside Go's standard library), and leaves the card files in `target/shanlingq2/.subsonic` and the release ZIP beside them. More: [contrib/shanlingq2/README](contrib/shanlingq2/README).
 
 ## Changes and contributing
 

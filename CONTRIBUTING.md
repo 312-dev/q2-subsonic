@@ -4,7 +4,7 @@ Thanks for helping. Bug reports and feature requests go in [Issues](https://gith
 
 ## Setup
 
-Go 1.22 or later and python3. The app uses Go's standard library only: please don't add dependencies.
+Go 1.22 or later and python3. go.mod pins the Go toolchain the release is built with (`toolchain go1.27.4`); a `go` older than that downloads it on first use. The app uses Go's standard library only: please don't add dependencies.
 
 ```sh
 go vet ./...
