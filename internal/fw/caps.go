@@ -12,8 +12,8 @@ type Caps struct {
 	Library  bool
 	// Words of Q2 Pod 1.5.9 and later. "game" and "audio" are not for this app.
 	Pages, Goto, Sleep, Sections, Art, Window, Sort bool
-	// The Server Library's words: the firmware reads a catalogue and keeps hearts in step with the
-	// server (q2-coda's docs/server-library.md). The app writes neither's files without its word.
+	// The Server Library's words: the firmware reads a catalogue and keeps stars and likes in step
+	// with the server (q2-coda's docs/server-library.md). The app writes neither's files without its word.
 	Catalogue, Ratings bool
 	// "libsource": the Library's Streaming Songs switch (Local + Server) is the firmware's to set,
 	// and it says which it is in /tmp/q2-addon.library ("server" or "local"). A Show in Library row

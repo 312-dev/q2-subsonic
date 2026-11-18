@@ -11,6 +11,10 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 - Lyrics from your server: when the Q2's lyrics page shows a song from your server that has no lyrics of its own, the app asks the server for them once (OpenSubsonic's `getLyricsBySongId` on Navidrome, else `getLyrics` by artist and title) and saves them beside the song as a `.lrc`, timed line by line when the server's are, so the page shows them, and shows them at once the next time with no request. A song the server has none for isn't asked about again for 30 days. The `.lrc` goes when its song leaves the card or the Stream Cache. Requires a Q2 Muse whose lyrics page asks the app (q2app's `lyrics=1`); older firmware never asks.
 - Album covers in the car without the wait: when the car shows an album from your server whose cover the Q2 doesn't have yet, the app fetches that cover from the server right away, at the car's size, and keeps it with the others, instead of the car showing a blank tile until the app's background rounds reach the album. Each cover is asked for once; one the server has none of isn't asked again, and one that couldn't be fetched (the server out of reach, the card full) is tried again after 10 minutes at the earliest. Requires a Q2 Muse whose Car Remote asks the app (q2app's `covers=1`); older firmware never asks.
 
+### Changed
+
+- Stars and likes are separate: a song's stars on the Q2 go to your server as its rating, and a like (the heart) as its star, each on its own, so liking a song no longer sets five stars and rating a song no longer takes its like away. Both come back from the server the same way. Requires a Q2 Muse that keeps likes apart from stars (the firmware's `likes` extension; q2app now says `ratings=2`); on older firmware stars and likes stay on the Q2 until it is updated.
+
 ### Fixed
 
 - Starting Radio on the song that is playing no longer downloads that song a second time: the radio plays on from the file the app already has, or waits for the one still arriving, instead of fetching it again, which wasted data, card writes and CPU.

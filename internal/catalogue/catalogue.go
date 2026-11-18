@@ -1,7 +1,7 @@
 // Package catalogue is the app's half of Q2 Pod's Server Library (q2-coda's docs/server-library.md):
 // the server's songs and playlists that are not on the card, written for the firmware to show in
-// its Library beside the card's own, and the hearts that follow a song between the Q2 and the
-// server.
+// its Library beside the card's own, and the stars and likes that follow a song between the Q2 and
+// the server.
 //
 // Every file is in the app's folder on the card (.subsonic/), each written whole and renamed into
 // place unless it says otherwise:
@@ -11,8 +11,8 @@
 //	server-playlists.tsv  the server's playlists, their changed dates and songs (Playlists)
 //	catalogue.tsv         what the firmware imports: the songs not synced, and the playlists (Write)
 //	catalogue.avail       a line appended for each song the stream cache gains or loses (Avail)
-//	ratings.out           the firmware's: hearts changed on the Q2, taken by renaming (TakeOut)
-//	ratings.in            the server's hearts that differ from what the Q2 was told (WriteIn)
+//	ratings.out           the firmware's: stars and likes changed on the Q2, taken by renaming (TakeOut)
+//	ratings.in            the server's stars and likes that differ from what the Q2 was told (WriteIn)
 //	playlists.out         the firmware's: server playlists changed on the Q2, taken by renaming
 //	                      (TakePls)
 //	covers/               the catalogue's album covers, <album id>.jpg, and its playlists',
@@ -64,13 +64,15 @@ func (s Song) Subsonic() subsonic.Song {
 		Suffix: s.Suffix}
 }
 
-// Hearts is the song's hearts on the Q2's scale: a star is five (stock's My Fav), else the rating.
-func (s Song) Hearts() int {
-	if s.Starred != "" {
-		return 5
-	}
-	return min(max(s.Rating, 0), 5)
+// Rated is a song's stars and like as the Q2 keeps them, apart: the stars are the server's rating
+// (setRating, 0 to 5) and the like its star (star and unstar; stock's My Fav on the Q2).
+type Rated struct {
+	Stars int
+	Like  bool
 }
+
+// Rated is the song's stars and like.
+func (s Song) Rated() Rated { return Rated{min(max(s.Rating, 0), 5), s.Starred != ""} }
 
 // FileURL is the path the firmware gives a server row (its identity, never a file that exists):
 // <card>/.<app>/cat/<album id>/<sid>.<suffix>, built as the firmware builds it, without cleaning.

@@ -105,7 +105,7 @@ func TestServerLibraryNeedsTheWord(t *testing.T) {
 }
 
 // The first connection is the first copy: every song paged, the playlists, the catalogue written,
-// the server's hearts to ratings.in, and server=up.
+// the server's stars and likes to ratings.in, and server=up.
 func TestFirstCopy(t *testing.T) {
 	lib := fakesonic.Library(1203)
 	lib[0].Rating = 4
@@ -121,7 +121,7 @@ func TestFirstCopy(t *testing.T) {
 	}
 	in := catLines(t, r.file(catalogue.InName))
 	key := catalogue.ListenKey(catalogue.FileURL(r.card, "subsonic", "al0", "s1", "flac"))
-	if len(in) != 1 || !strings.HasPrefix(in[0], key+"\ts1\t4\t") {
+	if len(in) != 2 || !strings.HasPrefix(in[0], key+"\ts1\tstars=4\t") || !strings.HasPrefix(in[1], key+"\ts1\tlike=0\t") {
 		t.Fatal(in)
 	}
 	if sub := r.settingsOp("settings"); !slices.Contains(titles(sub), "Resync Library") {
@@ -170,7 +170,7 @@ func TestLaterConnections(t *testing.T) {
 	if !gone.Gone {
 		t.Fatalf("s3: %+v", gone)
 	}
-	if in := catLines(t, r.file(catalogue.InName)); !strings.HasPrefix(in[len(in)-1], catalogue.ListenKey(catalogue.FileURL(r.card, "subsonic", "al0", "s1", "flac"))+"\ts1\t5\t") {
+	if in := catLines(t, r.file(catalogue.InName)); !strings.HasPrefix(in[len(in)-1], catalogue.ListenKey(catalogue.FileURL(r.card, "subsonic", "al0", "s1", "flac"))+"\ts1\tlike=1\t") {
 		t.Fatal(in)
 	}
 }
@@ -261,7 +261,7 @@ func TestRatingsOut(t *testing.T) {
 	r.slResync()
 	r.check(t)
 	if _, err := os.Stat(r.file(catalogue.InName)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the walk sent the Q2's own hearts back: %q", catLines(t, r.file(catalogue.InName)))
+		t.Fatalf("the walk sent the Q2's own stars and likes back: %q", catLines(t, r.file(catalogue.InName)))
 	}
 	// A lost server keeps them for the next connection.
 	os.WriteFile(r.file(catalogue.OutName), []byte(fmt.Sprintf("k\ts2\t1\t%d\n", time.Now().Unix())), 0o644)
@@ -269,8 +269,39 @@ func TestRatingsOut(t *testing.T) {
 	r.f.Down = true
 	r.f.Mu.Unlock()
 	r.slConnect(r.client())
-	if l := catLines(t, r.file(catalogue.OutName+".sending")); len(l) != 1 || !strings.HasPrefix(l[0], "k\ts2\t1\t") {
+	if l := catLines(t, r.file(catalogue.OutName+".sending")); len(l) != 2 || !strings.HasPrefix(l[0], "k\ts2\tstars=1\t") ||
+		!strings.HasPrefix(l[1], "k\ts2\tlike=0\t") { // one number kept as its two values
 		t.Fatal(l)
+	}
+}
+
+// ratings=2's lines through a connection: stars and a like sent each on its own, and the
+// server's values back in ratings.in as a stars line and a like line.
+func TestStarsAndLikesOut(t *testing.T) {
+	lib := fakesonic.Library(3)
+	lib[1].Rating = 3 // s2: stars on the server, which a like from the Q2 leaves alone
+	r := newCatRig(t, "playlist catalogue ratings likes", lib)
+	r.check(t)
+	os.Remove(r.file(catalogue.InName))
+	now := time.Now().Unix()
+	out := fmt.Sprintf("k1\ts1\tstars=4\t%d\nk2\ts2\tlike=1\t%d\n", now, now)
+	os.WriteFile(r.file(catalogue.OutName), []byte(out), 0o644)
+	r.sl.mu.Lock()
+	r.sl.up = -1 // sent at a connection
+	r.sl.mu.Unlock()
+	r.check(t)
+	if want := []string{"setRating s1 4", "star s2"}; !slices.Equal(r.f.Writes, want) {
+		t.Fatal(r.f.Writes)
+	}
+	r.f.Mu.Lock()
+	r.f.Songs[2].Rating, r.f.Songs[2].Starred = 2, "2026-11-20T00:00:00Z" // s3, changed on the server
+	r.f.Mu.Unlock()
+	r.slResync()
+	r.check(t)
+	key := catalogue.ListenKey(catalogue.FileURL(r.card, "subsonic", r.f.Songs[2].AlbumID, "s3", "flac"))
+	in := catLines(t, r.file(catalogue.InName))
+	if len(in) != 2 || in[0] != key+"\ts3\tstars=2\t1795132800" || in[1] != key+"\ts3\tlike=1\t1795132800" {
+		t.Fatal(in)
 	}
 }
 

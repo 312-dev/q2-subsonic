@@ -25,8 +25,8 @@ import (
 // "catalogue" word and Settings' Show in Library on, the app keeps catalogue.tsv, the server's
 // songs that are not on the card, for the firmware's Library to show beside the card's own; says
 // in the state file whether the server answers (server=up or down); and plays what the firmware
-// asks for from those rows (.catplay). With the "ratings" word too, hearts follow a song between
-// the Q2 and the server. Without the words nothing of this is written. With the "libsource" word
+// asks for from those rows (.catplay). With the "ratings" word too, stars and likes follow a song
+// between the Q2 and the server. Without the words nothing of this is written. With the "libsource" word
 // the firmware's Library setting Streaming Songs (Local + Server) must be on too: while it is off
 // (q2-addon.library says "local") the app pauses, asking the server nothing and keeping its files,
 // and it goes on where it was when the switch is turned on again.
@@ -432,7 +432,7 @@ func (d *daemon) slFail(what string, err error) {
 	d.sl.mu.Unlock()
 }
 
-// slConnect is what runs each time the server answers again: the Q2's hearts are sent first
+// slConnect is what runs each time the server answers again: the Q2's stars and likes are sent first
 // (a rating has no date on the server, so the change waiting on the Q2 is the newer), then the
 // server's hint is read: no walk yet is the first copy, made now; a changed hint is a walk when
 // the Q2 is idle or charging. Playlists (by their changed dates) and stars are checked every time,
@@ -528,9 +528,9 @@ func (d *daemon) slWalk(cl *subsonic.Client) {
 	d.slWalkWith(ctx, cl, hint, nil)
 }
 
-// slWalkWith is a full walk: every song paged to the store, the hearts that differ to ratings.in,
-// and the catalogue written. It reports whether it went through.
-func (d *daemon) slWalkWith(ctx context.Context, cl *subsonic.Client, hint catalogue.Hint, sent map[string]int) bool {
+// slWalkWith is a full walk: every song paged to the store, the stars and likes that differ to
+// ratings.in, and the catalogue written. It reports whether it went through.
+func (d *daemon) slWalkWith(ctx context.Context, cl *subsonic.Client, hint catalogue.Hint, sent map[string]catalogue.Rated) bool {
 	acct := d.acct()
 	start := time.Now()
 	res, err := d.store().Walk(ctx, cl, acct, hint, sent, func(n int) {
@@ -660,7 +660,7 @@ func (d *daemon) listenKey(synced map[string]string) func(catalogue.Change) stri
 	}
 }
 
-// slRatingsIn writes the server's hearts that changed to ratings.in, with the firmware's "ratings".
+// slRatingsIn writes the server's stars and likes that changed to ratings.in, with the firmware's "ratings".
 func (d *daemon) slRatingsIn(ch []catalogue.Change) {
 	if !d.caps.Ratings || len(ch) == 0 {
 		return
@@ -672,10 +672,11 @@ func (d *daemon) slRatingsIn(ch []catalogue.Change) {
 	d.log.Printf("server library: %d ratings from the server", len(ch))
 }
 
-// slSendRatings sends ratings.out with the firmware's "ratings": the hearts the Q2 has from now on
-// go to the server, and what didn't go waits for the next connection. A server whose star is newer
-// wins, and its hearts go back in ratings.in. It returns the hearts sent, by song id.
-func (d *daemon) slSendRatings(ctx context.Context, cl *subsonic.Client) map[string]int {
+// slSendRatings sends ratings.out with the firmware's "ratings": the stars and likes given on the
+// Q2 go to the server, and what didn't go waits for the next connection. A server whose star is
+// newer than the Q2's like wins, and its like goes back in ratings.in. It returns the stars and
+// likes the server now has from the Q2, by song id.
+func (d *daemon) slSendRatings(ctx context.Context, cl *subsonic.Client) map[string]catalogue.Rated {
 	if !d.caps.Ratings {
 		return nil
 	}
@@ -706,25 +707,25 @@ func (d *daemon) slSendRatings(ctx context.Context, cl *subsonic.Client) map[str
 		d.log.Printf("server library: ratings.out: %v", kerr)
 	}
 	d.log.Printf("server library: %d ratings sent, %d kept by the server's newer star, %d left, %d dropped",
-		len(res.Hearts), len(res.Wins), len(res.Rest), res.Dropped)
+		len(res.Values), len(res.Wins), len(res.Rest), res.Dropped)
 	if err != nil {
 		d.slFail("ratings", err)
 	}
 	d.slRatingsIn(res.Wins)
-	if len(res.Hearts) > 0 { // the store follows, so a walk or star check doesn't send them back
+	if len(res.Values) > 0 { // the store follows, so a walk or star check doesn't send them back
 		d.store().Rewrite(d.acct(), func(s catalogue.Song) (catalogue.Song, bool) {
-			if h, ok := res.Hearts[s.ID]; ok {
-				s.Rating = h
-				if h == 5 && s.Starred == "" {
+			if v, ok := res.Values[s.ID]; ok {
+				s.Rating = v.Stars
+				if v.Like && s.Starred == "" {
 					s.Starred = time.Now().UTC().Format(time.RFC3339)
-				} else if h < 5 {
+				} else if !v.Like {
 					s.Starred = ""
 				}
 			}
 			return s, true
 		})
 	}
-	return res.Hearts
+	return res.Values
 }
 
 // slSendPlaylists sends playlists.out with the firmware's "playlists": each server playlist the Q2

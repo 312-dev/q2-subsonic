@@ -17,19 +17,20 @@ type Pager interface {
 	SongInfos(ctx context.Context, offset, size int) ([]subsonic.SongInfo, error)
 }
 
-// Change is a song's hearts as the server has them, for the Q2.
+// Change is a song's stars and like as the server has them, for the Q2.
 type Change struct {
-	SID    string
-	Song   Song // the song as the walk or the star check found it
-	Hearts int
-	At     int64 // when the server's value was set: the star's time, else when it was read
+	SID   string
+	Song  Song // the song as the walk or the star check found it
+	Stars int  // 0 to 5
+	Like  bool
+	At    int64 // when the server's values were set: the star's time, else when they were read
 }
 
 // WalkResult is what a walk found.
 type WalkResult struct {
 	Songs, Gone, Requests int
 	Complete              bool     // every song the server counts was seen: the songs not seen are gone
-	Changes               []Change // hearts that differ from the store's
+	Changes               []Change // stars or likes that differ from the store's
 }
 
 // ErrNoSongs is a walk that found nothing on a server where the store had songs: a server that
@@ -45,19 +46,19 @@ var now = time.Now
 // offset). A song in the store that the walk didn't see is kept and marked gone, never removed:
 // Navidrome hides a missing file and gives it its id again when it comes back. That is only when
 // the walk is complete (it saw hint.Count songs, or the hint has no count); else the songs not
-// seen are kept as they were. sent is the hearts just sent to the server, which its answers may
+// seen are kept as they were. sent is the stars and likes just sent to the server, which its answers may
 // not show yet. note is told how many songs have come.
-func (st Store) Walk(ctx context.Context, p Pager, account string, hint Hint, sent map[string]int, note func(int)) (WalkResult, error) {
+func (st Store) Walk(ctx context.Context, p Pager, account string, hint Hint, sent map[string]Rated, note func(int)) (WalkResult, error) {
 	var res WalkResult
-	prev := map[string]int8{}
+	prev := map[string]Rated{}
 	if err := st.Each(account, func(s Song) error {
-		prev[s.ID] = int8(s.Hearts())
+		prev[s.ID] = s.Rated()
 		return nil
 	}); err != nil {
 		return res, err
 	}
-	for id, h := range sent {
-		prev[id] = int8(h)
+	for id, r := range sent {
+		prev[id] = r
 	}
 	f, err := create(st.Card, st.Path)
 	if err != nil {
@@ -87,8 +88,8 @@ func (st Store) Walk(ctx context.Context, p Pager, account string, hint Hint, se
 				return res, err
 			}
 			old, had := prev[s.ID]
-			if h := s.Hearts(); int(old) != h && (had || h > 0) {
-				res.Changes = append(res.Changes, Change{SID: s.ID, Song: s, Hearts: h, At: changedAt(s)})
+			if r := s.Rated(); old != r && (had || r != Rated{}) {
+				res.Changes = append(res.Changes, Change{SID: s.ID, Song: s, Stars: r.Stars, Like: r.Like, At: changedAt(s)})
 			}
 		}
 		if note != nil {
@@ -129,7 +130,7 @@ func (st Store) Walk(ctx context.Context, p Pager, account string, hint Hint, se
 	return res, f.commit()
 }
 
-// changedAt is when the server's hearts for s were set: its star's time, else now.
+// changedAt is when the server's stars and like for s were set: its star's time, else now.
 func changedAt(s Song) int64 {
 	if t, err := time.Parse(time.RFC3339, s.Starred); err == nil {
 		return t.Unix()
@@ -141,7 +142,7 @@ func changedAt(s Song) int64 {
 // starred that the store has unstarred, or the other way, is a Change, and the store is written
 // again with the new stars. Run on every connection: a star changes without a scan. sent is as
 // for Walk.
-func (st Store) StarChanges(account string, starred []subsonic.SongInfo, sent map[string]int) ([]Change, error) {
+func (st Store) StarChanges(account string, starred []subsonic.SongInfo, sent map[string]Rated) ([]Change, error) {
 	now := map[string]string{}
 	for _, s := range starred {
 		now[s.ID] = s.Starred
@@ -152,9 +153,9 @@ func (st Store) StarChanges(account string, starred []subsonic.SongInfo, sent ma
 		if s.Gone || on == (s.Starred != "") {
 			return s, true
 		}
-		before := s.Hearts()
-		if h, ok := sent[s.ID]; ok {
-			before = h
+		before := s.Rated()
+		if r, ok := sent[s.ID]; ok {
+			before = r
 		}
 		if on {
 			s.Starred = at
@@ -164,8 +165,8 @@ func (st Store) StarChanges(account string, starred []subsonic.SongInfo, sent ma
 		} else {
 			s.Starred = ""
 		}
-		if s.Hearts() != before {
-			out = append(out, Change{SID: s.ID, Song: s, Hearts: s.Hearts(), At: changedAt(s)})
+		if r := s.Rated(); r != before {
+			out = append(out, Change{SID: s.ID, Song: s, Stars: r.Stars, Like: r.Like, At: changedAt(s)})
 		}
 		return s, true
 	}
