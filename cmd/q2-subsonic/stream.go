@@ -202,13 +202,14 @@ func (s *streamer) playingNow() (string, time.Time) {
 	return strings.TrimSpace(string(b)), st.ModTime()
 }
 
-// clean empties the stream folder of its files: a new list, or a daemon start, leaves no uncached
-// songs or queue from an older one on the card (M26). The cache's folders stay.
-func (s *streamer) clean() {
+// clean empties the stream folder of its files, but for the spare ones (a radio's first song, which
+// plays as it is): a new list, or a daemon start, leaves no uncached songs or queue from an older
+// one on the card (M26). The cache's folders stay.
+func (s *streamer) clean(spare ...string) {
 	s.dropGrowing()
 	ents, _ := os.ReadDir(s.dir())
 	for _, e := range ents {
-		if !e.IsDir() {
+		if !e.IsDir() && !slices.Contains(spare, filepath.Join(s.dir(), e.Name())) {
 			library.Remove(s.root, filepath.Join(s.dir(), e.Name()))
 		}
 	}
@@ -325,7 +326,7 @@ func (s *streamer) startRun(songs []subsonic.Song, paths []string, from int, cat
 		s.started(refill != nil)
 	}
 	stale, staleAt := s.playingNow() // belongs to the previous list
-	s.clean()                        // old queue file, stale and half-fetched songs
+	s.clean(paths...)                // old queue file, stale and half-fetched songs; not a card file that plays as it is
 	m := s.manifest()
 	jobs := make([]job, len(songs))
 	base := s.cacheBase()

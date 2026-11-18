@@ -20,6 +20,7 @@ import (
 	"github.com/andsuor/q2-subsonic/internal/library"
 	"github.com/andsuor/q2-subsonic/internal/q2"
 	"github.com/andsuor/q2-subsonic/internal/q2spot"
+	"github.com/andsuor/q2-subsonic/internal/subsonic"
 )
 
 const (
@@ -81,6 +82,28 @@ func (s *streamer) whole(path string) bool {
 	g := s.growing[path]
 	s.gmu.Unlock()
 	return !g && exists(path)
+}
+
+// awaitSeed waits for a radio's first song to be whole when the list playing is still writing it: in
+// place at path (a card file it was playing from), or into the cache at the path jobFor would give
+// it. Starting the radio cancels that list's download, so it would be fetched twice, and a file
+// arriving in place would be deleted under the player. It returns the path the radio plays the song
+// from: path, or "" when the download failed and the radio fetches the song itself. At most radioIn.
+func (s *streamer) awaitSeed(sg subsonic.Song, path string) string {
+	ext, q := s.format(sg)
+	cached := s.cachePath(s.cacheBase(), sg, ext, q)
+	arriving := func(p string) bool {
+		s.gmu.Lock()
+		defer s.gmu.Unlock()
+		return p != "" && (s.growing[p] || exists(p+".part") && s.active())
+	}
+	for end := time.Now().Add(radioIn); (arriving(path) || arriving(cached)) && time.Now().Before(end); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if path != "" && !s.whole(path) {
+		return ""
+	}
+	return path
 }
 
 func (s *streamer) journal() string { return filepath.Join(s.dir(), ".growing") }

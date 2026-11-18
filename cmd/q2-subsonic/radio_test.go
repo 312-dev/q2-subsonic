@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // stateKey is the state file's value for key, "" when it has none.
@@ -126,5 +127,80 @@ func TestRadioNeedsTheWord(t *testing.T) {
 	d.ask("7 start " + d.streamed("al0.1"))
 	if d.stateKey("radioack") != "" {
 		t.Fatal("answered without the word")
+	}
+}
+
+// seedPath is where the stream put song id: its stream cache file (one subfolder under the account's,
+// hashed), or the stream folder's top when the cache is Off. "" until it is there.
+func (d *tdaemon) seedPath(id string) string {
+	for _, pat := range []string{
+		filepath.Join(d.card, ".subsonic", "stream", "*", "*", "*", "* [[]"+id+"].flac"),
+		filepath.Join(d.card, ".subsonic", "stream", "* [[]"+id+"].flac"),
+	} {
+		if m, _ := filepath.Glob(pat); len(m) > 0 {
+			return m[0]
+		}
+	}
+	return ""
+}
+
+// Radio on the song a list is playing, which the stream already has on the card, takes that file as
+// the radio's first song: the server is asked for it once, by the list's own stream, whether the
+// stream kept it in its cache or (Stream Cache Off) in the stream folder's top.
+func TestRadioSeedIsNotFetchedAgain(t *testing.T) {
+	for name, cacheMB := range map[string]int{"cache on": 0, "cache off": -1} {
+		t.Run(name, func(t *testing.T) {
+			n := &nav{albums: 4, songsPer: 6, simStep: true}
+			d := newTestDaemon(t, n, "playlist radio", true)
+			if err := d.saveSettings(settings{StreamCacheMB: cacheMB}); err != nil {
+				t.Fatal(err)
+			}
+			d.do("play", "album:al3 2")
+			eventually(t, "the seed streamed", func() bool { return d.seedPath("al3.2") != "" })
+			path := d.seedPath("al3.2")
+			os.WriteFile(d.stream.playingFile, []byte(path+"\n"), 0o644) // the firmware plays it
+			d.ask("7 start " + path)
+			eventually(t, "the request answered", func() bool { return d.stateKey("radioack") == "7 0" })
+			d.waitQueued(t, 13)
+			if q := d.queueLines(); streamID(q[0]) != "al3.2" || !exists(q[0]) {
+				t.Fatalf("the radio's first song %q is not the seed on the card", q[0])
+			}
+			if got := n.fetches("al3.2"); got != 1 {
+				t.Fatalf("the seed was fetched %d times, want 1", got)
+			}
+		})
+	}
+}
+
+// Radio on a song the list's own stream is still writing into place (a Q2 that plays a song as it
+// arrives): the radio waits for that download rather than start a second one, and its first song is
+// the one file, whole.
+func TestRadioSeedStillArrivingIsNotFetchedAgain(t *testing.T) {
+	n := &nav{albums: 4, songsPer: 6, simStep: true, half: make(chan struct{})}
+	d := newTestDaemon(t, n, "playlist radio ahead grow", true)
+	d.do("play", "album:al3 2")
+	eventually(t, "the seed arriving", func() bool {
+		p := d.seedPath("al3.2")
+		return p != "" && !d.stream.whole(p)
+	})
+	path := d.seedPath("al3.2")
+	os.WriteFile(d.stream.playingFile, []byte(path+"\n"), 0o644)
+	d.ask("7 start " + path)
+	eventually(t, "the request answered", func() bool { return d.stateKey("radioack") == "7 0" })
+	time.Sleep(300 * time.Millisecond) // a second download would have started by now
+	if got := n.fetches("al3.2"); got != 1 {
+		t.Fatalf("the seed was fetched %d times while it arrived, want 1", got)
+	}
+	close(n.half)
+	d.waitQueued(t, 13)
+	q := d.queueLines()
+	if q[0] != path {
+		t.Fatalf("the radio's first song is %q, not the file arriving at %q", q[0], path)
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Size() != 1000 {
+		t.Fatalf("the seed's file: %v, %v", fi, err)
+	}
+	if got := n.fetches("al3.2"); got != 1 {
+		t.Fatalf("the seed was fetched %d times, want 1", got)
 	}
 }

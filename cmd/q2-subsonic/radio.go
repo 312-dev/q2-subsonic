@@ -164,6 +164,9 @@ func (d *daemon) radioStart(ctx context.Context, cl *subsonic.Client, seed, titl
 	d.radio.mu.Unlock()
 	d.state.setRadio(title)
 	d.spawn(func() {
+		if first != nil {
+			path = d.stream.awaitSeed(*first, path)
+		}
 		d.playMu.Lock()
 		defer d.playMu.Unlock()
 		if d.latestPlay(seq) {
@@ -177,15 +180,16 @@ var errNoSimilar = errors.New("no similar songs")
 
 // songOf is the server song a card path plays: a Library row's (the catalogue's path), a streamed or
 // cached file's (the id in its name), or a synced song's; "" for a song that isn't the server's.
-// keep is path when it can play as it is as the radio's first song: a card file outside the stream
-// folder's top, which a new list empties (streamer.clean).
+// keep is path when it is a file already on the card that can play as it is as the radio's first
+// song, instead of the server being asked for it again: a synced song, or a file of the stream
+// folder (in its cache, or at its top when the cache is Off), whole or still arriving.
 func (d *daemon) songOf(path string) (id, keep string) {
 	if id := catalogue.SIDOf(d.card, appID, path); id != "" {
 		return id, ""
 	}
 	if strings.HasPrefix(path, d.stream.dir()+"/") {
 		if id := streamID(path); id != "" {
-			if filepath.Dir(path) != d.stream.dir() && exists(path) {
+			if exists(path) {
 				return id, path
 			}
 			return id, ""

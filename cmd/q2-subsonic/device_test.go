@@ -42,6 +42,7 @@ type nav struct {
 	trickle          bool                                                    // every request is answered a byte now and then, for ever
 	errCode          int                                                     // every API call fails with this Subsonic code
 	block            chan struct{}                                           // downloads wait for it
+	half             chan struct{}                                           // a download sends 400 bytes, then waits for it before the rest
 	failID           string                                                  // getAlbum fails for this album only
 	failCode         int                                                     // the Subsonic code failID fails with; 0 means 70, "Album not found"
 	albumReqs        atomic.Int32                                            // getAlbum calls served
@@ -86,6 +87,7 @@ type nav struct {
 	plain            map[string]string                                       // getLyrics' text by title; nil: getLyrics is not found (HTTP 404)
 	reqMu            sync.Mutex
 	reqN             map[string]int        // requests served, by endpoint
+	idN              map[string]int        // download and stream requests served, by song id
 	lastQ            map[string]url.Values // the latest request's query, by endpoint
 }
 
@@ -99,6 +101,13 @@ func (n *nav) reqs(op string) int {
 	n.reqMu.Lock()
 	defer n.reqMu.Unlock()
 	return n.reqN[op]
+}
+
+// fetches is how many times the song id was downloaded or streamed.
+func (n *nav) fetches(id string) int {
+	n.reqMu.Lock()
+	defer n.reqMu.Unlock()
+	return n.idN[id]
 }
 
 func (n *nav) song(al, j int) map[string]any {
@@ -193,6 +202,12 @@ func (n *nav) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		n.reqN, n.lastQ = map[string]int{}, map[string]url.Values{}
 	}
 	n.reqN[op]++
+	if op == "download" || op == "stream" {
+		if n.idN == nil {
+			n.idN = map[string]int{}
+		}
+		n.idN[q.Get("id")]++
+	}
 	n.lastQ[op] = q
 	n.reqMu.Unlock()
 	if n.errCode != 0 && op != "download" && op != "stream" {
@@ -458,6 +473,18 @@ func (n *nav) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-999/1000", from))
 			w.WriteHeader(http.StatusPartialContent)
 			w.Write([]byte(strings.Repeat("x", 1000-from)))
+			return
+		}
+		if n.half != nil {
+			w.Header().Set("Content-Length", "1000")
+			w.Write([]byte(strings.Repeat("x", 400)))
+			w.(http.Flusher).Flush()
+			select {
+			case <-n.half:
+			case <-r.Context().Done():
+				return
+			}
+			w.Write([]byte(strings.Repeat("x", 600)))
 			return
 		}
 		w.Write([]byte(strings.Repeat("x", 1000)))
