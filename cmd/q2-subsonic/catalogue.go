@@ -266,7 +266,7 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 				if a := art[id]; a != "" {
 					ask = a
 				}
-				jpg, err := d.fetchCover(ctx, cl, ask, cv)
+				jpg, err := d.fetchCover(ctx, cl, ask, cv, false)
 				mu.Lock()
 				var ae *subsonic.APIError
 				switch {
@@ -343,9 +343,11 @@ func (d *daemon) slSettle() {
 	d.sl.mu.Unlock()
 }
 
-// fetchCover is album id's cover from the server, cv's side at most, as a baseline JPEG.
-func (d *daemon) fetchCover(ctx context.Context, cl *subsonic.Client, id string, cv catalogue.Covers) ([]byte, error) {
-	if err := syncer.Net.Acquire(ctx, false); err != nil {
+// fetchCover is album id's cover from the server, cv's side at most, as a baseline JPEG. With prio
+// (a cover the car is waiting for) it takes the network slot before a sync's next file, as a
+// stream's song does.
+func (d *daemon) fetchCover(ctx context.Context, cl *subsonic.Client, id string, cv catalogue.Covers, prio bool) ([]byte, error) {
+	if err := syncer.Net.Acquire(ctx, prio); err != nil {
 		return nil, err
 	}
 	defer syncer.Net.Release()

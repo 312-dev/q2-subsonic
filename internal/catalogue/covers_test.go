@@ -101,3 +101,40 @@ func TestCoverPlanCountsTheAverageCover(t *testing.T) {
 		t.Fatal(p.Todo)
 	}
 }
+
+// Open is a pass for one cover at a time: it counts the folder against the budget, deletes nothing,
+// and Noted reads .none.
+func TestCoverOpen(t *testing.T) {
+	card := t.TempDir()
+	c := Covers{Card: card, Dir: filepath.Join(card, ".subsonic", CoversName, BigName), Px: BigPx, Body: BigBody}
+	p, err := c.Open() // makes the folder
+	if err != nil || p.Used() != 0 {
+		t.Fatal(p, err)
+	}
+	os.WriteFile(c.Path("other"), []byte("x"), 0o644)
+	unit, _ := c.cluster()
+	c.Budget = 2 * unit
+	p, _ = c.Open()
+	if p.Used() != unit {
+		t.Fatal(p.Used())
+	}
+	if err := p.Save("a", []byte("jpeg")); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Save("b", []byte("jpeg")); !errors.Is(err, ErrCardFull) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(c.Path("other")); err != nil {
+		t.Fatal("Open deleted a cover:", err)
+	}
+	if c.Noted("n") {
+		t.Fatal("noted before None")
+	}
+	p.None("n")
+	if !c.Noted("n") {
+		t.Fatal("not noted after None")
+	}
+	if _, err := (Covers{Card: card, Dir: filepath.Join(t.TempDir(), "covers")}).Open(); err == nil {
+		t.Fatal("a folder outside the card")
+	}
+}

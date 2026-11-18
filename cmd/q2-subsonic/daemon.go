@@ -110,6 +110,14 @@ type stateKeys struct {
 	radio  string // the radio's seed title (radio.go); "" writes no radio key
 	ack    string // radioack=: the last .radio request answered, "<seq> <code>"; "" none
 	lyrAck string // lyricsack=: the last .lrcask request answered, "<seq> <code>"; "" none
+	covAck string // coverack=: the last .coverask line answered, "<seq> <code>"; "" none
+}
+
+func (s *stateKeys) setCoverAck(v string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.covAck = v
+	return s.flush()
 }
 
 func (s *stateKeys) setLyricsAck(v string) error {
@@ -189,6 +197,9 @@ func (s *stateKeys) flush() error {
 	}
 	if s.lyrAck != "" {
 		m["lyricsack"] = s.lyrAck
+	}
+	if s.covAck != "" {
+		m["coverack"] = s.covAck
 	}
 	return s.st.Write(m)
 }
@@ -312,6 +323,7 @@ type daemon struct {
 	st                 stState          // Settings > Storage's files (storage.go)
 	radio              radioState       // the radio playing and its recent songs (radio.go)
 	lyr                lyricsState      // the firmware's lyrics requests (lyrics.go)
+	cov                coverAskState    // the car's cover requests (coverask.go)
 
 	bg sync.WaitGroup // the work replies leave running (ping, preview, play, sign-out's stops); tests wait for it
 }
@@ -661,6 +673,7 @@ func (d *daemon) tick() {
 	d.stTick()
 	d.radioTick()
 	d.lyricsTick()
+	d.coverTick()
 	if d.caps.Library {
 		d.mu.Lock()
 		d.libPoll()

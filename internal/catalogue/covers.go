@@ -30,6 +30,9 @@ import (
 // budget and notes: the car remote sends them when the phone asks for more than CoverPx, as the
 // 160 px ones look soft on a car's screen. They are fetched once the 160 px set has nothing left
 // to fetch, and the Q2 itself never draws them (its rows decode a cover whole on its UI thread).
+//
+// A cover the car asks for before a round reaches it is fetched at once and saved through Open, in
+// either folder, within the same budget and notes.
 type Covers struct {
 	Card, Dir string
 	Budget    int64 // 0: CoverBudget
@@ -76,7 +79,7 @@ type Album struct{ ID, Name, Art string }
 func PlaylistCovers(pls []Playlist) []Album {
 	var out []Album
 	for _, p := range pls {
-		if id := "pl-" + p.ID; p.Art != "" && coverID(p.ID) {
+		if id := "pl-" + p.ID; p.Art != "" && CoverID(p.ID) {
 			out = append(out, Album{id, p.Name, p.Art})
 		}
 	}
@@ -90,7 +93,7 @@ func Albums(st Store, b Build) ([]Album, error) {
 	seen := map[string]bool{}
 	var out []Album
 	err := st.Each(b.Account, func(s Song) error {
-		if _, synced := b.Synced[s.ID]; synced || s.Gone && b.Local[s.ID] == "" || !coverID(s.AlbumID) || seen[s.AlbumID] {
+		if _, synced := b.Synced[s.ID]; synced || s.Gone && b.Local[s.ID] == "" || !CoverID(s.AlbumID) || seen[s.AlbumID] {
 			return nil
 		}
 		seen[s.AlbumID] = true
@@ -107,8 +110,8 @@ func Albums(st Store, b Build) ([]Album, error) {
 	return out, err
 }
 
-// coverID is whether id can name a file: the firmware builds the path from it as it is.
-func coverID(id string) bool {
+// CoverID is whether id can name a file: the firmware builds the path from it as it is.
+func CoverID(id string) bool {
 	return id != "" && id != "." && id != ".." && !strings.ContainsAny(id, "/\\\x00")
 }
 
@@ -204,6 +207,35 @@ func (c Covers) Plan(albums []Album) (*CoverPass, error) {
 	return p, nil
 }
 
+// Open is a CoverPass for album covers saved one at a time between rounds (the car's asks,
+// q2-subsonic's coverask.go): the folder's size so far, nothing to fetch and nothing deleted. It
+// makes the folder.
+func (c Covers) Open() (*CoverPass, error) {
+	if !library.Owned(c.Card, c.Path("x"), nil) {
+		return nil, errors.New("refusing covers outside owned trees: " + c.Dir)
+	}
+	if err := os.MkdirAll(c.Dir, 0o755); err != nil {
+		return nil, err
+	}
+	unit, _ := c.cluster()
+	ents, err := os.ReadDir(c.Dir)
+	if err != nil {
+		return nil, err
+	}
+	var used int64
+	for _, e := range ents {
+		if strings.HasSuffix(e.Name(), ".jpg") && e.Type().IsRegular() {
+			if info, err := e.Info(); err == nil {
+				used += clusters(info.Size(), unit)
+			}
+		}
+	}
+	return &CoverPass{c: c, used: used, unit: unit, art: map[string]string{}, saved: map[string]string{}}, nil
+}
+
+// Noted is whether album id is noted in .none as having no cover.
+func (c Covers) Noted(id string) bool { return c.none()[id] }
+
 // noteKey is how .none notes id: with the coverArt id it was asked by, when it has one.
 func noteKey(id, art string) string {
 	if art != "" {
@@ -249,7 +281,7 @@ var ErrCardFull = errors.New("covers: no room on the card")
 // Save writes album id's cover, b (a baseline JPEG), whole and renamed into place, unless that
 // would pass the budget or leave the card under CoverFloor.
 func (p *CoverPass) Save(id string, b []byte) error {
-	if !coverID(id) {
+	if !CoverID(id) {
 		return errors.New("covers: bad album id " + id)
 	}
 	size := clusters(int64(len(b)), p.unit)
@@ -298,7 +330,7 @@ func (p *CoverPass) Used() int64 { return p.used }
 // None notes that the server has no cover for album id (a playlist's: under its coverArt id).
 func (p *CoverPass) None(id string) error {
 	c := p.c
-	if !coverID(id) {
+	if !CoverID(id) {
 		return nil
 	}
 	path := filepath.Join(c.Dir, noneName)
