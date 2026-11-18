@@ -3,7 +3,7 @@
 # its card files in OUT/.subsonic and zipped as a release ships it, OUT/q2-subsonic-vX.Y-SHA.zip, to unzip
 # at the card's root (or for System settings -> App Store to install).
 #   contrib/shanlingq2/build.sh [OUT]
-# Needs Go 1.22 or later and python3. It has no dependencies. go.mod pins the toolchain that builds it
+# Needs Go 1.21 or later and python3. It has no dependencies. go.mod pins the toolchain that builds it
 # (the `toolchain` line); a `go` older than that downloads it into the module cache on first use.
 set -eu
 APP=subsonic

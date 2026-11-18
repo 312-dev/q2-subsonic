@@ -18,6 +18,7 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 ### Security
 
 - Built with Go 1.27.4 instead of 1.22.2, which brings the app's copy of the Go standard library (TLS, HTTP, image and archive handling) up to date: a vulnerability scan of the app found 77 known issues in the old one and none in the new. The app is about 1.9 MB larger on the card (the zip grows from 2.9 MB to 3.6 MB).
+- The app's connections to your server follow Go 1.27's stricter defaults: a server that signs its TLS handshake with SHA-1, uses an RSA key under 1024 bits, or has a certificate with a negative serial number is refused, and the handshake offers post-quantum key exchange (X25519MLKEM768) where the server supports it. Servers with a certificate from a public authority such as Let's Encrypt are unaffected.
 
 ## [1.0] - 2026-11-16
 
