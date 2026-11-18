@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -823,5 +824,97 @@ func TestNeedslibPress(t *testing.T) {
 			t.Fatalf("tick %v: saved off: %q", tick, m)
 		}
 		r.bg.Wait()
+	}
+}
+
+// Once every cover is there, the rounds read neither the store nor the folders again (on the Q2
+// that was seconds of CPU a minute) until something they depend on changes: here a walk finds an
+// album more, whose covers are then fetched.
+func TestCoversSettle(t *testing.T) {
+	r := newCatRig(t, "catalogue", fakesonic.Library(30)) // al0 to al9
+	r.f.Mu.Lock()
+	r.f.Covers = map[string][]byte{}
+	for i := range 11 {
+		r.f.Covers[fmt.Sprintf("al%d@160", i)] = testJPEG(t, 160)
+		r.f.Covers[fmt.Sprintf("al%d@512", i)] = testJPEG(t, 512)
+	}
+	r.f.Mu.Unlock()
+	planned := func() int {
+		r.sl.mu.Lock()
+		defer r.sl.mu.Unlock()
+		return r.sl.planned
+	}
+	r.check(t) // the first copy
+	r.check(t) // the Q2's covers
+	r.check(t) // the car's
+	r.check(t) // nothing left: settled
+	if n := r.calls("getCoverArt"); n != 20 {
+		t.Fatal("getCoverArt calls:", n)
+	}
+	before := planned()
+	for range 3 {
+		r.check(t)
+	}
+	if n := planned() - before; n != 0 {
+		t.Fatalf("%d rounds read the store with every cover there", n)
+	}
+	r.f.Mu.Lock()
+	r.f.Songs = append(r.f.Songs, fakesonic.Song{ID: "s31", Title: "New", Album: "Album 10", AlbumID: "al10", Artist: "Artist",
+		Suffix: "flac", Year: 2001, Track: 1, Duration: 200, Size: 1000})
+	r.f.Count, r.f.LastScan = 31, "2026-11-15T01:00:00Z"
+	r.f.Mu.Unlock()
+	r.slResync()
+	r.check(t) // the walk: the store changes
+	r.check(t) // al10's 160 px
+	r.check(t) // and its 512 px
+	if n := r.calls("getCoverArt"); n != 22 {
+		t.Fatal("the new album's covers: getCoverArt calls:", n)
+	}
+	for _, p := range []string{"al10.jpg", filepath.Join(catalogue.BigName, "al10.jpg")} {
+		if _, err := os.Stat(filepath.Join(r.file(catalogue.CoversName), p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A 512 px folder at its budget but for less than one more cover asks the server for none: it
+// fetched one a minute and threw it away, as Save had no room for it.
+func TestBigCoversAtTheBudget(t *testing.T) {
+	r := newCatRig(t, "catalogue", fakesonic.Library(30)) // al0 to al9
+	r.f.Mu.Lock()
+	r.f.Covers = map[string][]byte{}
+	for i := range 10 {
+		r.f.Covers[fmt.Sprintf("al%d@160", i)] = testJPEG(t, 160)
+		r.f.Covers[fmt.Sprintf("al%d@512", i)] = testJPEG(t, 512)
+	}
+	r.f.Mu.Unlock()
+	r.check(t) // the first copy
+	r.check(t) // the Q2's covers
+	big := r.bigCovers()
+	os.MkdirAll(big.Dir, 0o755)
+	var fs syscall.Statfs_t
+	if err := syscall.Statfs(big.Dir, &fs); err != nil {
+		t.Fatal(err)
+	}
+	unit := int64(fs.Bsize)
+	each := catalogue.CoverBudget / 9 / unit * unit
+	for i := range 9 { // nine covers there, one cluster of the budget to spare
+		f, err := os.Create(big.Path(fmt.Sprintf("al%d", i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		size := each
+		if i == 8 {
+			size = catalogue.CoverBudget - 8*each - unit
+		}
+		f.Truncate(size) // sparse: only the size counts
+		f.Close()
+	}
+	before := r.calls("getCoverArt")
+	for range 3 {
+		r.check(t)
+	}
+	if n := r.calls("getCoverArt") - before; n != 0 {
+		t.Fatalf("asked for %d covers there was no room for", n)
 	}
 }

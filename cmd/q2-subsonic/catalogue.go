@@ -58,6 +58,8 @@ type serverLib struct {
 	songs    int       // songs of the last walk
 	walked   time.Time // when it ended
 	catplay  string    // the .catplay last answered (or there at start-up)
+	settled  string    // coversKey when a round of covers last found nothing it could fetch
+	planned  int       // rounds of covers that read the store and the folders (for tests)
 }
 
 func (d *daemon) slInit() {
@@ -203,9 +205,20 @@ func (d *daemon) bigCovers() catalogue.Covers {
 // a stream takes first. What was saved stays, so the next round, a minute on, goes on from there.
 // A cover the server says it hasn't is noted and not asked again; a lost server ends the round,
 // and so does a sync starting or a song of the stream to fetch. Once the 160 px set has nothing
-// left to fetch, the rounds fetch the car's 512 px set (bigCovers) the same way.
+// left to fetch, the rounds fetch the car's 512 px set (bigCovers) the same way. Once neither has
+// anything it can fetch (all there, noted, or no room), the rounds do nothing until coversKey
+// changes.
 func (d *daemon) slCovers(cl *subsonic.Client) {
 	if !d.slQuiet() && !charging() {
+		return
+	}
+	d.sl.mu.Lock()
+	settled := d.sl.settled != "" && d.sl.settled == d.coversKey()
+	if !settled {
+		d.sl.planned++
+	}
+	d.sl.mu.Unlock()
+	if settled {
 		return
 	}
 	b := catalogue.Build{Card: d.card, App: appID, Account: d.acct(), Synced: d.syncedPaths(), Local: d.stream.copies()}
@@ -231,6 +244,8 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 	if err != nil || len(pass.Todo) == 0 {
 		if err != nil {
 			d.slFail("covers", err)
+		} else {
+			d.slSettle()
 		}
 		return
 	}
@@ -288,11 +303,44 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 	wg.Wait()
 	d.log.Printf("server library: covers (%d px): %d saved, %d without, %d left, %d KiB in %v", cv.Side(), saved, none,
 		len(pass.Todo)-saved-none, pass.Used()>>10, time.Since(start).Round(time.Millisecond))
+	if errors.Is(lost, catalogue.ErrCardFull) {
+		d.slSettle() // no room: asked again once the card or the albums change
+	}
 	if lost != nil && subsonic.ConnectionLost(lost) {
 		d.slServer(lost)
 	} else if lost != nil && !errors.Is(lost, catalogue.ErrCardFull) {
 		d.log.Printf("server library: covers: %s", applog.Redact(lost.Error()))
 	}
+}
+
+// coversKey is what a round of covers depends on, read without opening a file: the account, the
+// store, the playlists and the manifest (the synced songs, whose albums are the card's) by size and
+// time, both folders' times (a cover written or deleted, the folder gone with Show in Library or
+// Sign Out), and whether the card is above CoverFloor. A round that found nothing it could fetch
+// (slSettle) is not run again until it changes: reading the store and every cover's size took
+// seconds of the Q2's CPU a minute. The stream cache's songs are left out: they keep the cover of
+// a song gone from the server, whose album the server has no cover for anyway.
+func (d *daemon) coversKey() string {
+	var b strings.Builder
+	b.WriteString(d.acct())
+	for _, p := range []string{d.store().Path, d.playlistsFile().Path, filepath.Join(d.card, ".subsonic", "manifest.json"),
+		d.covers().Dir, d.bigCovers().Dir} {
+		if st, err := os.Stat(p); err == nil {
+			fmt.Fprintf(&b, "|%d %d", st.Size(), st.ModTime().UnixNano())
+		} else {
+			b.WriteString("|-")
+		}
+	}
+	fmt.Fprintf(&b, "|%t", d.free(d.card) >= catalogue.CoverFloor+catalogue.BigBody)
+	return b.String()
+}
+
+// slSettle notes that the covers' rounds have nothing to do until coversKey changes.
+func (d *daemon) slSettle() {
+	key := d.coversKey()
+	d.sl.mu.Lock()
+	d.sl.settled = key
+	d.sl.mu.Unlock()
 }
 
 // fetchCover is album id's cover from the server, cv's side at most, as a baseline JPEG.
@@ -316,6 +364,11 @@ func (d *daemon) fetchCover(ctx context.Context, cl *subsonic.Client, id string,
 	}
 	if len(b) > cv.MaxBody() {
 		return nil, errNoCover
+	}
+	if cv.Side() > catalogue.CoverPx { // the car's: kept as the server sent it when it is one already
+		if jpg, ok := asBaseline(b, cv.Side()); ok {
+			return jpg, nil
+		}
 	}
 	return baselineMax(b, cv.Side())
 }

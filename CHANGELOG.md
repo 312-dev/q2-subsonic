@@ -6,6 +6,10 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ## [Unreleased]
 
+### Fixed
+
+- With Show in Library, the app no longer takes a burst of the Q2's CPU every minute while music plays: once every album cover it can fetch is on the card, it stops checking them until your library or the card changes, and a covers folder that is full no longer downloads a cover a minute only to throw it away. The car's 512 pixel covers are saved as the server sends them when they are already a plain JPEG, instead of being decoded and encoded again, which took most of the CPU while they download. The app also runs at a lower priority, so the Q2's player, Bluetooth and screens go first.
+
 ## [1.0] - 2026-11-16
 
 ### Added

@@ -305,6 +305,55 @@ func baselineMax(b []byte, max int) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
+// asBaseline is b with the JFIF header when it is already what baselineMax makes, read from its
+// markers alone: an 8-bit baseline JPEG (SOF0) of three components and at most max pixels either
+// way, with no Adobe segment (which can mean RGB or CMYK samples). Decoding and encoding a 512 px
+// cover again took most of a cover round's CPU, and servers (Navidrome among them) send such
+// JPEGs as they are. ok is false for anything else, which baselineMax then decodes.
+func asBaseline(b []byte, max int) (out []byte, ok bool) {
+	if len(b) < 4 || b[0] != 0xff || b[1] != 0xd8 {
+		return nil, false
+	}
+	hasJFIF := false
+	for i := 2; i+4 <= len(b); {
+		if b[i] != 0xff {
+			return nil, false
+		}
+		m := b[i+1]
+		if m == 0xff { // fill byte
+			i++
+			continue
+		}
+		n := int(b[i+2])<<8 | int(b[i+3])
+		if n < 2 || i+2+n > len(b) {
+			return nil, false
+		}
+		seg := b[i+4 : i+2+n]
+		switch {
+		case m == 0xe0 && i == 2 && bytes.HasPrefix(seg, []byte("JFIF\x00")):
+			hasJFIF = true
+		case m == 0xee: // Adobe
+			return nil, false
+		case m == 0xc0: // baseline: precision, height, width, components
+			if len(seg) < 6 || seg[0] != 8 || seg[5] != 3 {
+				return nil, false
+			}
+			h, w := int(seg[1])<<8|int(seg[2]), int(seg[3])<<8|int(seg[4])
+			if w < 1 || h < 1 || w > max || h > max {
+				return nil, false
+			}
+			if hasJFIF {
+				return b, true
+			}
+			return append(append([]byte(nil), jfif...), b[2:]...), true
+		case m >= 0xc1 && m <= 0xcf && m != 0xc4 && m != 0xc8 && m != 0xcc, m == 0xda, m == 0xd9:
+			return nil, false // another kind of frame, or the scan before any frame
+		}
+		i += 2 + n
+	}
+	return nil, false
+}
+
 // store writes a cover's file, whole then renamed as the firmware asks, and drops the oldest ones
 // past artBudget. Not a card write: the name is the key's, under the app's own folder in /tmp.
 // c.mu is held.

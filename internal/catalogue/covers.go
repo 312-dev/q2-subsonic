@@ -143,8 +143,9 @@ type CoverPass struct {
 
 // Plan deletes the covers of albums no longer in albums (and any file that is not a cover), and
 // returns the albums still to fetch, in albums' order: those with no file and no note in .none,
-// as many as the budget has room for at one cluster each beside what is there. It makes the
-// folder.
+// as many as the budget has room for beside what is there, each counted at the size of the
+// folder's average cover (one cluster while it has none). A cover that won't fit is never
+// fetched, only to be refused by Save. It makes the folder.
 func (c Covers) Plan(albums []Album) (*CoverPass, error) {
 	if !library.Owned(c.Card, c.Path("x"), nil) {
 		return nil, errors.New("refusing covers outside owned trees: " + c.Dir)
@@ -158,7 +159,7 @@ func (c Covers) Plan(albums []Album) (*CoverPass, error) {
 	}
 	none, arts := c.none(), c.arts()
 	unit, _ := c.cluster()
-	var used int64
+	var used, n int64
 	have := map[string]bool{}
 	ents, err := os.ReadDir(c.Dir)
 	if err != nil {
@@ -172,6 +173,7 @@ func (c Covers) Plan(albums []Album) (*CoverPass, error) {
 		case isCover && want[id] && e.Type().IsRegular():
 			if info, err := e.Info(); err == nil {
 				used += clusters(info.Size(), unit)
+				n++
 			}
 			have[id] = true
 		default: // an album gone from the catalogue, a .tmp left by a cut write
@@ -179,7 +181,10 @@ func (c Covers) Plan(albums []Album) (*CoverPass, error) {
 		}
 	}
 	p := &CoverPass{c: c, used: used, unit: unit, art: map[string]string{}, saved: map[string]string{}}
-	room := used
+	room, each := used, unit // a cover to come takes what the folder's average one does
+	if n > 0 {
+		each = max(unit, clusters(used/n, unit))
+	}
 	for _, a := range albums {
 		if a.Art != "" {
 			p.art[a.ID] = a.Art
@@ -190,10 +195,10 @@ func (c Covers) Plan(albums []Album) (*CoverPass, error) {
 		if have[a.ID] && arts[a.ID] == a.Art || none[noteKey(a.ID, a.Art)] {
 			continue
 		}
-		if room+unit > c.budget() {
+		if room+each > c.budget() {
 			break
 		}
-		room += unit
+		room += each
 		p.Todo = append(p.Todo, a.ID)
 	}
 	return p, nil

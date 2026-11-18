@@ -525,3 +525,38 @@ func TestCoversOnlyForAlbumAndPlaylistLists(t *testing.T) {
 		t.Fatalf("%+v opens %+v, want %+v", row, got, want)
 	}
 }
+
+// A server's cover that is already a three-component baseline JPEG small enough is kept as it was
+// sent, with the JFIF header; anything else is left to baselineMax.
+func TestAsBaseline(t *testing.T) {
+	var b bytes.Buffer
+	jpeg.Encode(&b, image.NewRGBA(image.Rect(0, 0, 512, 300)), nil)
+	raw := b.Bytes()
+	out, ok := asBaseline(raw, 512)
+	if !ok || !bytes.Equal(out, append(append([]byte(nil), jfif...), raw[2:]...)) {
+		t.Fatal("a baseline JPEG not kept as sent", ok)
+	}
+	if again, ok := asBaseline(out, 512); !ok || !bytes.Equal(again, out) {
+		t.Fatal("the JFIF header added twice")
+	}
+	if _, ok := asBaseline(raw, 400); ok {
+		t.Fatal("past the size")
+	}
+	b.Reset()
+	jpeg.Encode(&b, image.NewGray(image.Rect(0, 0, 64, 64)), nil)
+	if _, ok := asBaseline(b.Bytes(), 512); ok {
+		t.Fatal("one component kept")
+	}
+	b.Reset()
+	png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 64, 64)))
+	if _, ok := asBaseline(b.Bytes(), 512); ok {
+		t.Fatal("a PNG kept")
+	}
+	if _, ok := asBaseline(raw[:40], 512); ok {
+		t.Fatal("a cut file kept")
+	}
+	adobe := append([]byte{0xff, 0xd8, 0xff, 0xee, 0, 14, 'A', 'd', 'o', 'b', 'e', 0, 100, 0, 0, 0, 0, 0}, raw[2:]...)
+	if _, ok := asBaseline(adobe, 512); ok {
+		t.Fatal("an Adobe JPEG kept")
+	}
+}

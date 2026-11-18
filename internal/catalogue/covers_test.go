@@ -76,3 +76,28 @@ func TestCoverPlanAndBudget(t *testing.T) {
 		t.Fatal("a path out of the folder")
 	}
 }
+
+// A folder at its budget but for less than one of its covers plans nothing: a cover fetched then
+// would only be refused by Save, round after round.
+func TestCoverPlanCountsTheAverageCover(t *testing.T) {
+	card := t.TempDir()
+	c := Covers{Card: card, Dir: filepath.Join(card, ".subsonic", CoversName)}
+	os.MkdirAll(c.Dir, 0o755)
+	unit, _ := c.cluster()
+	for _, id := range []string{"a", "b", "c"} {
+		os.WriteFile(c.Path(id), make([]byte, 4*unit), 0o644)
+	}
+	c.Budget = 12*unit + 2*unit // the three, and room for half of one more
+	albums := []Album{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}, {ID: "e"}}
+	p, err := c.Plan(albums)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Todo) != 0 {
+		t.Fatal("planned past the budget:", p.Todo)
+	}
+	c.Budget = 12*unit + 4*unit // room for one
+	if p, _ = c.Plan(albums); !slices.Equal(p.Todo, []string{"d"}) {
+		t.Fatal(p.Todo)
+	}
+}
