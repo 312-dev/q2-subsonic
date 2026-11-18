@@ -1264,6 +1264,32 @@ func TestRenameCarriesCover(t *testing.T) {
 	}
 }
 
+// A renamed song's lyrics (.lrc beside it: the app's from the server, or Get Album Lyrics') move
+// with it, and a removed song's go with it, so its album folder is pruned.
+func TestLyricsFollowSyncedSong(t *testing.T) {
+	_, r, root := setup(t)
+	from, to := root+"/Subsonic/Art/1999 - Alb/01 - r.flac", root+"/Subsonic/Art/2000 - Alb/01 - r.flac"
+	gone := root + "/Subsonic/Art/1998 - Old/01 - g.flac"
+	put(t, from, "r")
+	put(t, strings.TrimSuffix(from, ".flac")+".lrc", "line one\n")
+	put(t, gone, "g")
+	put(t, strings.TrimSuffix(gone, ".flac")+".lrc", "line two\n")
+	g := &library.Entry{ID: "g", Path: gone, Quality: "original", Size: 1}
+	(&library.Manifest{Songs: map[string]*library.Entry{"r": {ID: "r", Path: from, Quality: "original", Size: 1}, "g": g}}).Save(root, root+"/.subsonic/manifest.json")
+	r.Start(plan.Plan{Rename: []plan.Move{{From: from, To: to, ID: "r"}}, Remove: []*library.Entry{g}})
+	if s := wait(t, r); s.State != "done" || s.Failed != 0 {
+		t.Fatalf("%+v", s)
+	}
+	if c, err := os.ReadFile(strings.TrimSuffix(to, ".flac") + ".lrc"); err != nil || string(c) != "line one\n" {
+		t.Error("lyrics not carried:", err)
+	}
+	for _, d := range []string{filepath.Dir(from), filepath.Dir(gone)} {
+		if _, err := os.Stat(d); !os.IsNotExist(err) {
+			t.Error("album folder left:", d)
+		}
+	}
+}
+
 // The firmware's answer to a library request (R35): the files it imported become the app's own; an
 // added file it skipped because the Q2 has a playlist of that name (the user's) is renamed
 // "<name> (Subsonic).m3u", to add again; one skipped under that name as well is a clash.

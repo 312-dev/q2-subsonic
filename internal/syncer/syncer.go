@@ -879,8 +879,8 @@ func (r *Runner) freePlaylistFile(m *library.Manifest, name string, skipBase boo
 }
 
 // remove deletes path through the guard and, when its album folder is left holding only
-// cover.jpg and a replaced plan's leftover .part and .part.key files, those too, so the guard
-// prunes the folder.
+// cover.jpg, a replaced plan's leftover .part and .part.key files and lyrics (.lrc) whose song is
+// gone, those too, so the guard prunes the folder.
 // ponytail: a leftover of a song later in this run, paused earlier, is fetched again from the start.
 func (r *Runner) remove(path string) error {
 	if err := library.Remove(r.root, path); err != nil {
@@ -892,7 +892,8 @@ func (r *Runner) remove(path string) error {
 		return nil
 	}
 	for _, e := range es {
-		if n := e.Name(); e.IsDir() || n != "cover.jpg" && !strings.HasSuffix(n, ".part") && !strings.HasSuffix(n, ".part.key") {
+		if n := e.Name(); e.IsDir() || n != "cover.jpg" && !strings.HasSuffix(n, ".part") && !strings.HasSuffix(n, ".part.key") &&
+			!strings.EqualFold(filepath.Ext(n), ".lrc") {
 			return nil // a song, or something else, still lives here
 		}
 	}
@@ -951,6 +952,9 @@ func (r *Runner) rename(from, to string, orphan bool) error {
 	}
 	if err := os.Rename(from, to); err != nil {
 		return err
+	}
+	if lf, lt := library.LrcFile(from), library.LrcFile(to); lf != lt && owned(r.root, lt) == nil {
+		os.Rename(lf, lt) // its lyrics, when it has a .lrc; else remove takes none
 	}
 	r.carryCover(filepath.Dir(from), filepath.Dir(to))
 	return r.remove(from) // the file is gone already; this prunes the folders it left empty

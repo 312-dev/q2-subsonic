@@ -109,6 +109,14 @@ type stateKeys struct {
 	sync   string // "" writes no sync key
 	radio  string // the radio's seed title (radio.go); "" writes no radio key
 	ack    string // radioack=: the last .radio request answered, "<seq> <code>"; "" none
+	lyrAck string // lyricsack=: the last .lrcask request answered, "<seq> <code>"; "" none
+}
+
+func (s *stateKeys) setLyricsAck(v string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lyrAck = v
+	return s.flush()
 }
 
 func (s *stateKeys) setRadio(v string) error {
@@ -178,6 +186,9 @@ func (s *stateKeys) flush() error {
 	}
 	if s.ack != "" {
 		m["radioack"] = s.ack
+	}
+	if s.lyrAck != "" {
+		m["lyricsack"] = s.lyrAck
 	}
 	return s.st.Write(m)
 }
@@ -300,6 +311,7 @@ type daemon struct {
 	qrSeen             bool             // the QR page's marker was there since the sign-in started (qrLeft)
 	st                 stState          // Settings > Storage's files (storage.go)
 	radio              radioState       // the radio playing and its recent songs (radio.go)
+	lyr                lyricsState      // the firmware's lyrics requests (lyrics.go)
 
 	bg sync.WaitGroup // the work replies leave running (ping, preview, play, sign-out's stops); tests wait for it
 }
@@ -383,6 +395,7 @@ func newDaemon(dir, card, tmp string) *daemon {
 	d.stream.avail, d.stream.pinged = d.slAvail, d.slPinged // before the sweep, whose drops tell avail
 	d.slInit()
 	d.radioInit()
+	d.lyricsInit()
 	d.stream.played = d.radioPlayed
 	d.stream.started = func(radio bool) {
 		if !radio {
@@ -647,6 +660,7 @@ func (d *daemon) tick() {
 	d.slTick()
 	d.stTick()
 	d.radioTick()
+	d.lyricsTick()
 	if d.caps.Library {
 		d.mu.Lock()
 		d.libPoll()

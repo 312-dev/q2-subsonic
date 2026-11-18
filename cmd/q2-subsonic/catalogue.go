@@ -621,7 +621,7 @@ func (s *streamer) copies() map[string]string {
 		for _, x := range subdirs(q) {
 			ents, _ := os.ReadDir(x)
 			for _, e := range ents {
-				if id := streamID(e.Name()); id != "" && e.Type().IsRegular() && !strings.HasSuffix(e.Name(), ".part") {
+				if id := streamID(e.Name()); id != "" && e.Type().IsRegular() && library.IsSong(e.Name()) { // not a .part or .lrc
 					out[id] = filepath.Join(x, e.Name())
 				}
 			}

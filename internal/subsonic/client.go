@@ -860,3 +860,69 @@ func transportKind(err error) error {
 	}
 	return ErrUnreachable
 }
+
+// LyricLine is one line of a song's lyrics: its start in milliseconds (a synced one's) and its text.
+type LyricLine struct {
+	Start int64
+	Text  string
+}
+
+// Lyrics is a song's lyrics as the server gives them: lines timed when Synced, else plain text a
+// line each. Offset is OpenSubsonic's, LRC's [offset:]: milliseconds a positive value shows every
+// line sooner by.
+type Lyrics struct {
+	Synced bool
+	Offset int64
+	Lines  []LyricLine
+}
+
+// Offers reports whether the server lists OpenSubsonic extension ext (offers).
+func (c *Client) Offers(ctx context.Context, ext string) (bool, error) { return c.offers(ctx, ext) }
+
+// LyricsBySongID is OpenSubsonic's getLyricsBySongId (the songLyrics extension): the song's synced
+// lyrics when the server has any, else its first unsynced ones; ok false when it has none.
+func (c *Client) LyricsBySongID(ctx context.Context, id string) (l Lyrics, ok bool, err error) {
+	var r struct {
+		List struct {
+			Structured []struct {
+				Synced bool  `json:"synced"`
+				Offset int64 `json:"offset"`
+				Line   []struct {
+					Start int64  `json:"start"`
+					Value string `json:"value"`
+				} `json:"line"`
+			} `json:"structuredLyrics"`
+		} `json:"lyricsList"`
+	}
+	if err := c.call(ctx, "getLyricsBySongId", url.Values{"id": {id}}, &r); err != nil {
+		return Lyrics{}, false, err
+	}
+	pick := -1
+	for i, s := range r.List.Structured {
+		if len(s.Line) > 0 && (pick < 0 || s.Synced && !r.List.Structured[pick].Synced) {
+			pick = i
+		}
+	}
+	if pick < 0 {
+		return Lyrics{}, false, nil
+	}
+	s := r.List.Structured[pick]
+	l = Lyrics{Synced: s.Synced, Offset: s.Offset}
+	for _, ln := range s.Line {
+		l.Lines = append(l.Lines, LyricLine{Start: ln.Start, Text: ln.Value})
+	}
+	return l, true, nil
+}
+
+// PlainLyrics is Subsonic's getLyrics: the text the server has for artist and title, "" for none.
+func (c *Client) PlainLyrics(ctx context.Context, artist, title string) (string, error) {
+	var r struct {
+		Lyrics struct {
+			Value string `json:"value"`
+		} `json:"lyrics"`
+	}
+	if err := c.call(ctx, "getLyrics", url.Values{"artist": {artist}, "title": {title}}, &r); err != nil {
+		return "", err
+	}
+	return r.Lyrics.Value, nil
+}

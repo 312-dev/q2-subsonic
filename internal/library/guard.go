@@ -135,8 +135,16 @@ func WriteOwned(root, path string, data []byte) error {
 }
 
 // Remove is the only way the app deletes: it refuses anything not Owned, treats a missing file
-// as done, and prunes folders left empty under Subsonic/ (never Subsonic/ itself).
+// as done, and prunes folders left empty under Subsonic/ (never Subsonic/ itself). A song's lyrics
+// beside it (LrcFile) go with it.
 func Remove(root, path string) error { return remove(root, path, nil) }
+
+// LrcFile is the lyrics file Q2 Pod reads for the song at path: its name with .lrc for the
+// extension, beside it.
+func LrcFile(path string) string { return strings.TrimSuffix(path, filepath.Ext(path)) + ".lrc" }
+
+// IsSong reports whether name, a file's, is a song's by its extension (Playable).
+func IsSong(name string) bool { return Playable(strings.TrimPrefix(filepath.Ext(name), ".")) }
 
 // Remove is the package Remove that also accepts the playlist files recorded in m.
 func (m *Manifest) Remove(root, path string) error { return remove(root, path, m) }
@@ -147,6 +155,9 @@ func remove(root, path string, m *Manifest) error {
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
+	}
+	if IsSong(path) {
+		os.Remove(LrcFile(path)) // Owned: beside path, in its folder
 	}
 	top := filepath.Join(resolve(root+"/."), "Subsonic")
 	for d := filepath.Dir(resolve(path)); strings.HasPrefix(d, top+string(filepath.Separator)); d = filepath.Dir(d) {

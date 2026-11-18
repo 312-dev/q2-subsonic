@@ -6,6 +6,10 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ## [Unreleased]
 
+### Added
+
+- Lyrics from your server: when the Q2's lyrics page shows a song from your server that has no lyrics of its own, the app asks the server for them once (OpenSubsonic's `getLyricsBySongId` on Navidrome, else `getLyrics` by artist and title) and saves them beside the song as a `.lrc`, timed line by line when the server's are, so the page shows them, and shows them at once the next time with no request. A song the server has none for isn't asked about again for 30 days. The `.lrc` goes when its song leaves the card or the Stream Cache. Requires a Q2 Muse whose lyrics page asks the app (q2app's `lyrics=1`); older firmware never asks.
+
 ### Fixed
 
 - With Show in Library, the app no longer takes a burst of the Q2's CPU every minute while music plays: once every album cover it can fetch is on the card, it stops checking them until your library or the card changes, and a covers folder that is full no longer downloads a cover a minute only to throw it away. The car's 512 pixel covers are saved as the server sends them when they are already a plain JPEG, instead of being decoded and encoded again, which took most of the CPU while they download. The app also runs at a lower priority, so the Q2's player, Bluetooth and screens go first.

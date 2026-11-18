@@ -119,7 +119,8 @@ func subdirs(dir string) []string {
 
 // cacheFiles lists what is kept, for every account, the song played longest ago first, and counts
 // it: regular files at stream/<dir>/<dir>/<dir>/ only, so nothing else of .subsonic/ is ever a
-// file to delete. s.cmu is held.
+// file to delete, and of those the songs and their downloads (.part): a song's lyrics (.lrc) go
+// with it (library.Remove). s.cmu is held.
 // ponytail: emptied folders stay (51 an account); remove them if accounts ever come and go.
 func (s *streamer) cacheFiles() []cacheFile {
 	var out []cacheFile
@@ -129,6 +130,9 @@ func (s *streamer) cacheFiles() []cacheFile {
 			for _, x := range subdirs(q) {
 				ents, _ := os.ReadDir(x)
 				for _, e := range ents {
+					if n := strings.TrimSuffix(e.Name(), ".part"); !library.IsSong(n) {
+						continue
+					}
 					if fi, err := e.Info(); err == nil && fi.Mode().IsRegular() {
 						out = append(out, cacheFile{filepath.Join(x, e.Name()), fi.Size(), fi.ModTime()})
 						sum += fi.Size()

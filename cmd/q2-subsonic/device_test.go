@@ -80,6 +80,10 @@ type nav struct {
 	noAlbums         bool                                                    // getArtist lists no albums
 	explore          bool                                                    // albums name a genre and release types (exploreTypes), getArtist lists every album, getArtistInfo2 names similar artists
 	holdInfo         chan struct{}                                           // getArtistInfo2 waits for it
+	lyricExt         bool                                                    // getOpenSubsonicExtensions lists songLyrics, and getLyricsBySongId answers
+	synced           map[string][]string                                     // getLyricsBySongId's synced lines by song id, each "<ms> <text>"; an id not here has none
+	lyricOffset      int                                                     // getLyricsBySongId's offset, in ms
+	plain            map[string]string                                       // getLyrics' text by title; nil: getLyrics is not found (HTTP 404)
 	reqMu            sync.Mutex
 	reqN             map[string]int        // requests served, by endpoint
 	lastQ            map[string]url.Values // the latest request's query, by endpoint
@@ -391,6 +395,38 @@ func (n *nav) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 			ok(key, map[string]any{"song": n.songs(0)})
 		}
+	case "getOpenSubsonicExtensions":
+		var ext []any
+		if n.lyricExt {
+			ext = append(ext, map[string]any{"name": "songLyrics", "versions": []int{1}})
+		}
+		ok("openSubsonicExtensions", ext)
+	case "getLyricsBySongId":
+		if !n.lyricExt {
+			http.NotFound(w, r)
+			return
+		}
+		var list []any
+		if ls, has := n.synced[q.Get("id")]; has {
+			var lines []any
+			for _, l := range ls {
+				ms, text, _ := strings.Cut(l, " ")
+				at, _ := strconv.Atoi(ms)
+				lines = append(lines, map[string]any{"start": at, "value": text})
+			}
+			list = append(list, map[string]any{"lang": "xxx", "synced": true, "offset": n.lyricOffset, "line": lines})
+		}
+		ok("lyricsList", map[string]any{"structuredLyrics": list})
+	case "getLyrics":
+		if n.plain == nil {
+			http.NotFound(w, r)
+			return
+		}
+		l := map[string]any{"artist": q.Get("artist"), "title": q.Get("title")}
+		if v := n.plain[q.Get("title")]; v != "" {
+			l["value"] = v
+		}
+		ok("lyrics", l)
 	case "getSong":
 		al, j, _ := strings.Cut(strings.TrimPrefix(q.Get("id"), "al"), ".")
 		a, _ := strconv.Atoi(al)
