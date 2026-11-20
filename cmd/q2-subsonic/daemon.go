@@ -264,6 +264,7 @@ type preview struct {
 	note    string             // how far the check has come, such as "4500 of 10000 songs"; under daemon.mu
 	reclaim int64              // bytes of the plan's free space that are the stream cache's to give
 	over    int64              // bytes the plan would take the downloads past their limit (storage.go)
+	shown   time.Time          // when a status Sync page last showed it done (sync_status.go reopenAfter)
 }
 
 type libJob struct {

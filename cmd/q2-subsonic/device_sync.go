@@ -54,6 +54,12 @@ func (d *daemon) syncPage(cl *subsonic.Client) q2spot.Reply {
 	showDone := d.showDone
 	d.mu.Unlock()
 	switch {
+	case d.caps.Status && (snap.State == "running" || snap.State == "paused"):
+		return d.syncingStatus(snap)
+	case d.caps.Status && snap.State == "done" && showDone:
+		return d.doneStatus(snap)
+	case d.caps.Status && snap.State == "error" && showDone:
+		return d.stoppedStatus(snap)
 	case snap.State == "running" || snap.State == "paused":
 		return d.syncRows(snap)
 	case snap.State == "done" && showDone:
@@ -75,15 +81,22 @@ func (d *daemon) syncPage(cl *subsonic.Client) q2spot.Reply {
 		return q2spot.Reply{Rows: []q2spot.Row{info(msg), act("retry", "Retry", ""), act("check", "Check Again", ""),
 			list("details", "Details", "", det)}}
 	}
-	if _, err := d.selection(); err != nil {
+	sel, serr := d.selection()
+	if serr != nil {
 		return damagedSelection()
 	}
 	checking := func(note string) q2spot.Reply {
+		if d.caps.Status {
+			return d.checkingStatus()
+		}
 		return q2spot.Reply{Message: "refresh", Rows: []q2spot.Row{{Kind: "info", Title: "Checking server…", Subtitle: note}}}
 	}
 	d.mu.Lock()
 	p := d.preview
-	if p == nil || p.gen != d.gen || p.done && time.Since(p.at) > previewTTL {
+	// a status page asks the server each time it opens: a check shown before is a new opening
+	// once reopenAfter has passed (the firmware asks again at once after an action or Back)
+	reopened := d.caps.Status && p != nil && p.done && !p.shown.IsZero() && time.Since(p.shown) > reopenAfter
+	if p == nil || p.gen != d.gen || p.done && time.Since(p.at) > previewTTL || reopened {
 		d.dropPreview()
 		// No ceiling on the whole: a large library takes as long as it takes. A request that gets
 		// no answer ends it (the client's 15 s for headers, 30 s for a silent body, checkCallMax
@@ -95,16 +108,23 @@ func (d *daemon) syncPage(cl *subsonic.Client) q2spot.Reply {
 		d.spawn(func() { defer cancel(); d.computePreview(ctx, cl, p) })
 		return checking("")
 	}
-	done, pl, err, note, reclaim, over := p.done, p.plan, p.err, p.note, p.reclaim, p.over
+	done, pl, err, note, reclaim, over, at := p.done, p.plan, p.err, p.note, p.reclaim, p.over, p.at
 	if done && err != nil {
 		d.preview = nil // shown once; the next Sync tries again
+	}
+	if done {
+		p.shown = time.Now()
 	}
 	d.mu.Unlock()
 	switch {
 	case !done:
 		return checking(note)
+	case err != nil && d.caps.Status:
+		return d.failedStatus(err)
 	case err != nil:
 		return d.errRows(err, "")
+	case d.caps.Status:
+		return d.previewStatus(pl, len(sel.Items), at, reclaim, over, d.settings().limitBytes())
 	}
 	return previewRows(pl, reclaim, over, d.settings().limitBytes())
 }
@@ -182,6 +202,9 @@ func (d *daemon) computePreview(ctx context.Context, cl *subsonic.Client, p *pre
 	}
 	var fetch, cache, drop, planning, refresh time.Duration
 	sel, err := d.selection()
+	if err == nil { // the server is asked every time, even with nothing chosen: "up to date" only once it answered
+		err = cl.Ping(ctx)
+	}
 	resolved, names, gone := map[string][]subsonic.Song{}, map[string]string{}, map[string]bool{}
 	var mu sync.Mutex
 	var wg sync.WaitGroup

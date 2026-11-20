@@ -15,6 +15,8 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ### Changed
 
+- **Sync** on a Q2 Muse that draws it is one centred screen per state, as a phone's software update: Checking for changes, Up to date, N new songs with **Sync Now**, Syncing with a progress bar and **Stop**, Couldn't reach the server with **Try Again**, Nothing to sync yet. It asks the server every time it opens, even with nothing chosen, so a server that is down is no longer reported as up to date. Requires a Q2 Muse with the firmware's `status` word; older firmware keeps the rows.
+
 - Sync Offline from the Q2's Library: hold **Play/Pause** on a server song, album, artist or playlist, or open Now Playing's ⋯, and choose **Sync Offline** (or **Stop Syncing Offline**); the app chooses it for the next Sync and the Q2 says so. Requires a Q2 Muse with the Sync Offline row (q2app's `offline=1`).
 - Sync's wording is the same everywhere: **Sync Offline** and **Stop Syncing Offline** (were Add to Sync and Remove from Sync), **Sync Entire Library Offline**, the toasts `Syncing offline · N songs`, `Stopped syncing offline` and `Offline via <name>` (were Added to Sync, Removed from Sync and Included via), and the statuses `Available offline` and `X of Y songs offline` (were On Q2 and X of Y songs on Q2).
 

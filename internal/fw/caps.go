@@ -9,7 +9,9 @@ import (
 type Caps struct {
 	Playlist bool
 	Progress bool
-	Library  bool
+	// "status": a reply led by an info row "status" is drawn as one centred stack (Sync's states).
+	Status  bool
+	Library bool
 	// Words of Q2 Pod 1.5.9 and later. "game" and "audio" are not for this app.
 	Pages, Goto, Sleep, Sections, Art, Window, Sort bool
 	// The Server Library's words: the firmware reads a catalogue and keeps stars and likes in step
@@ -62,6 +64,8 @@ func ReadCaps(path string) Caps {
 			caps.Playlist = true
 		case "progress":
 			caps.Progress = true
+		case "status":
+			caps.Status = true
 		case "library":
 			caps.Library = true
 		case "pages":
