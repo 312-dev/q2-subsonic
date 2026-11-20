@@ -149,6 +149,8 @@ func (d *daemon) slTick() {
 // app started), the connection's checks run (slConnect); else a walk the hint asked for runs once
 // the Q2 is idle or charging. After a pause it writes the catalogue first (slFollowSource).
 func (d *daemon) slCheck() {
+	done, what := d.job("server library check", true), "pinged"
+	defer func() { done("%s", what) }()
 	d.sl.mu.Lock()
 	rewrite := d.sl.rewrite
 	d.sl.rewrite = false
@@ -171,6 +173,7 @@ func (d *daemon) slCheck() {
 		d.sl.checking.Store(true)
 		defer d.sl.checking.Store(false)
 		d.slConnect(cl) // a connection's checks, or a playlist the Q2 changed meanwhile
+		what = "connected"
 		return
 	}
 	d.sl.mu.Lock()
@@ -180,9 +183,11 @@ func (d *daemon) slCheck() {
 		d.sl.checking.Store(true)
 		defer d.sl.checking.Store(false)
 		d.slWalk(cl)
+		what = "walked the server's library"
 		return
 	}
 	d.slCovers(cl)
+	what = "a round of covers"
 }
 
 const (

@@ -129,7 +129,9 @@ func (d *daemon) stOwn() int64 {
 	}
 	stream := d.stream.dir()
 	own = 0
+	done, n := d.job("storage walk", false), 0
 	filepath.WalkDir(d.dir, func(p string, e fs.DirEntry, err error) error {
+		n++
 		if err != nil {
 			return nil
 		}
@@ -141,6 +143,7 @@ func (d *daemon) stOwn() int64 {
 		}
 		return nil
 	})
+	done("%d entries, %s", n, size(own))
 	d.mu.Lock()
 	d.st.own, d.st.ownAt = own, time.Now()
 	d.mu.Unlock()
