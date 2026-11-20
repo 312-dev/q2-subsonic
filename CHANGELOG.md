@@ -15,6 +15,9 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ### Changed
 
+- Sync Offline from the Q2's Library: hold **Play/Pause** on a server song, album, artist or playlist, or open Now Playing's ⋯, and choose **Sync Offline** (or **Stop Syncing Offline**); the app chooses it for the next Sync and the Q2 says so. Requires a Q2 Muse with the Sync Offline row (q2app's `offline=1`).
+- Sync's wording is the same everywhere: **Sync Offline** and **Stop Syncing Offline** (were Add to Sync and Remove from Sync), **Sync Entire Library Offline**, the toasts `Syncing offline · N songs`, `Stopped syncing offline` and `Offline via <name>` (were Added to Sync, Removed from Sync and Included via), and the statuses `Available offline` and `X of Y songs offline` (were On Q2 and X of Y songs on Q2).
+
 - The app's first page is now only its own: **Downloads** (what was **On This Q2**, with **Sync Entire Library** at its top), **Sync** and **Settings**, each with a line saying where it stands. Its Playlists, Albums, Artists, Discover and Search pages and the five swipe tabs are gone: while you are signed in, your server's music is in the Q2's own Library. To choose single albums or artists to sync, use **Go to Album** or **Go to Artist** on a song from the server.
 - The server's songs are in the Q2's Library whenever you are signed in: the **Show in Library** setting is gone, and signing out takes them out.
 

@@ -41,7 +41,7 @@ func TestBrowseFetchedOnce(t *testing.T) {
 	}{
 		{[]string{"artists"}, 121, "getArtists"},
 		{[]string{"search", "Album"}, 121, "search3"},
-		{[]string{"playlist", "playlist:pl1"}, 122, "getPlaylist"}, // Add to Sync, Play, the songs
+		{[]string{"playlist", "playlist:pl1"}, 122, "getPlaylist"}, // Sync Offline, Play, the songs
 		{[]string{"playlists"}, 1, "getPlaylists"},
 	} {
 		if got := d.all(c.op[0], c.op[1:]...); got != c.rows {
@@ -59,7 +59,7 @@ func TestBrowseFetchedOnce(t *testing.T) {
 	if got := n.reqs("getAlbum"); got != 1 {
 		t.Errorf("album then play: %d getAlbum requests, want 1", got)
 	}
-	if r := d.do("toggle", "album:al0"); r.Message != "Added to Sync · 120 songs" {
+	if r := d.do("toggle", "album:al0"); r.Message != "Syncing offline · 120 songs" {
 		t.Fatalf("toggle: %+v", r)
 	}
 	if got := n.reqs("getAlbum"); got != 2 {

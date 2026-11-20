@@ -117,7 +117,7 @@ func (v view) on(key string, ids map[string]bool) int {
 	return n
 }
 
-// status is an item's sync status: On Q2, Waiting to sync, X of Y songs on Q2, or "" when none of it
+// status is an item's sync status: Available offline, Waiting to sync, X of Y songs offline, or "" when none of it
 // is on the Q2 and it is not selected. total is Y when its songs were never fetched.
 func (v view) status(kind selection.Kind, id string, total int) string {
 	key := selection.Key(kind, id)
@@ -155,15 +155,15 @@ func (v view) status(kind selection.Kind, id string, total int) string {
 	case v.pending[key]:
 		return "Waiting to sync"
 	case selected && resolved && total == 0:
-		return "On Q2" // chosen and empty: nothing to wait for (I13)
+		return "Available offline" // chosen and empty: nothing to wait for (I13)
 	case x == 0 && selected:
 		return "Waiting to sync"
 	case x == 0:
 		return ""
 	case total == 0 || x >= total:
-		return "On Q2"
+		return "Available offline"
 	}
-	return fmt.Sprintf("%d of %d songs on Q2", x, total)
+	return fmt.Sprintf("%d of %d songs offline", x, total)
 }
 
 func (v view) item(kind selection.Kind, id, name, own string, total int) q2spot.Row {
@@ -176,10 +176,10 @@ func (v view) song(s subsonic.Song, listKey string, i int) q2spot.Row {
 		Context: fmt.Sprintf("song:%s %s %d", s.ID, listKey, i), Position: "toggle"}
 }
 
-// songStatus is a song row's sync status: On Q2, Waiting to sync, or "".
+// songStatus is a song row's sync status: Available offline, Waiting to sync, or "".
 func (v view) songStatus(s subsonic.Song) string {
 	if v.m.Songs[s.ID] != nil {
-		return "On Q2"
+		return "Available offline"
 	} else if v.sel.Has(selection.KindSong, s.ID) {
 		return "Waiting to sync"
 	}
@@ -193,7 +193,7 @@ func (d *daemon) syncNowRow() (q2spot.Row, bool) {
 	v := d.view()
 	n := 0
 	for _, it := range v.sel.Items {
-		if st := v.status(it.Kind, it.ID, 0); st != "On Q2" && st != "Not on the server" { // a sync can't bring it
+		if st := v.status(it.Kind, it.ID, 0); st != "Available offline" && st != "Not on the server" { // a sync can't bring it
 			n++
 		}
 	}
@@ -376,14 +376,14 @@ func (d *daemon) itemPage(ctx context.Context, cl *subsonic.Client, arg, cursor 
 	}
 	songs, albums := it.songs, it.albums
 	v := d.view()
-	rows := []q2spot.Row{act("toggle", "Add to Sync", key)}
+	rows := []q2spot.Row{act("toggle", "Sync Offline", key)}
 	if v.sel.Has(selection.KindLibrary, "all") { // a press could neither add nor remove it (R30, M37)
-		rows[0] = info("Included via Entire Library")
+		rows[0] = info("Offline via Entire Library")
 	}
 	for _, it := range v.sel.Items {
 		if it.Kind == kind && it.ID == id {
 			if rows[0].Kind == "action" {
-				rows[0].Title = "Remove from Sync"
+				rows[0].Title = "Stop Syncing Offline"
 			}
 			rows = append(rows, act("quality", "Quality: "+qualityName(it.Quality), key))
 		}
@@ -570,21 +570,21 @@ func (d *daemon) toggle(ctx context.Context, cl *subsonic.Client, arg string) q2
 		return q2spot.Fail(q2spot.Error, selDamaged)
 	}
 	if kind != selection.KindLibrary && sel.Has(selection.KindLibrary, "all") {
-		return q2spot.Reply{Message: "Included via Entire Library"}
+		return q2spot.Reply{Message: "Offline via Entire Library"}
 	}
 	if sel.Has(kind, id) {
 		sel.Toggle(selection.Item{Kind: kind, ID: id})
 		if err := d.saveSelection(sel); err != nil {
 			return q2spot.Fail(q2spot.Error, "Couldn't save the selection")
 		}
-		return q2spot.Reply{Message: "Removed from Sync"}
+		return q2spot.Reply{Message: "Stopped syncing offline"}
 	}
 	if kind == selection.KindLibrary {
 		sel.Toggle(selection.Item{Kind: kind, ID: id, Name: "Entire Library", Quality: d.settings().def()})
 		if err := d.saveSelection(sel); err != nil {
 			return q2spot.Fail(q2spot.Error, "Couldn't save the selection")
 		}
-		return q2spot.Reply{Message: "Added to Sync · Entire Library"}
+		return q2spot.Reply{Message: "Syncing offline · Entire Library"}
 	}
 	var name string
 	var n int
@@ -612,13 +612,13 @@ func (d *daemon) toggle(ctx context.Context, cl *subsonic.Client, arg string) q2
 		return q2spot.Fail(q2spot.Bad, "Bad request")
 	}
 	if via := d.coveredBy(ctx, cl, sel, kind, id, song); via != "" {
-		return q2spot.Reply{Message: "Included via " + via}
+		return q2spot.Reply{Message: "Offline via " + via}
 	}
 	sel.Toggle(selection.Item{Kind: kind, ID: id, Name: name, Quality: d.settings().def()})
 	if err := d.saveSelection(sel); err != nil {
 		return q2spot.Fail(q2spot.Error, "Couldn't save the selection")
 	}
-	return q2spot.Reply{Message: "Added to Sync · " + plural(n, "song")}
+	return q2spot.Reply{Message: "Syncing offline · " + plural(n, "song")}
 }
 
 // coveredBy names a selected item that already holds this album or song, or "".

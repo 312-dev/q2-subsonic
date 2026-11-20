@@ -15,7 +15,7 @@ import (
 func TestAlbumPageWithAlbumWord(t *testing.T) {
 	d := newTestDaemon(t, &nav{albums: 2, songsPer: 3}, "album", true)
 	sameRows(t, "page", d.do("album", "album:al1"),
-		"action toggle Add to Sync |  | album:al1",
+		"action toggle Sync Offline |  | album:al1",
 		"action play Play |  | album:al1 0",
 		"action shuffle Shuffle |  | album:al1",
 		"info about Artist | 2020 · 3 songs · 5 min | ",
@@ -25,7 +25,7 @@ func TestAlbumPageWithAlbumWord(t *testing.T) {
 	// a compilation: the album's own artist, each song its own
 	d = newTestDaemon(t, &nav{albums: 1, songsPer: 2, various: true}, "album", true)
 	sameRows(t, "compilation", d.do("album", "album:al0"),
-		"action toggle Add to Sync |  | album:al0",
+		"action toggle Sync Offline |  | album:al0",
 		"action play Play |  | album:al0 0",
 		"action shuffle Shuffle |  | album:al0",
 		"info about Various Artists | 2020 · 2 songs · 3 min | ",
@@ -37,7 +37,7 @@ func TestAlbumPageWithAlbumWord(t *testing.T) {
 func TestAlbumPageWithoutAlbumWord(t *testing.T) {
 	d := newTestDaemon(t, &nav{albums: 2, songsPer: 2}, "artist", true)
 	sameRows(t, "page", d.do("album", "album:al0"),
-		"action toggle Add to Sync |  | album:al0",
+		"action toggle Sync Offline |  | album:al0",
 		"action play Play |  | album:al0 0",
 		"action play Song 0 | Artist | song:al0.0 album:al0 0",
 		"action play Song 1 | Artist | song:al0.1 album:al0 1")

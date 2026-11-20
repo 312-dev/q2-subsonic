@@ -628,10 +628,10 @@ func TestHoldToggleToast(t *testing.T) {
 	if row.Position != "toggle" || row.Context != "album:al0" {
 		t.Fatalf("hold fields %+v", row)
 	}
-	if r := d.do(row.Position, row.Context); r.Message != "Added to Sync · 14 songs" {
+	if r := d.do(row.Position, row.Context); r.Message != "Syncing offline · 14 songs" {
 		t.Fatalf("toast %q", r.Message)
 	}
-	if r := d.do(row.Position, row.Context); r.Message != "Removed from Sync" {
+	if r := d.do(row.Position, row.Context); r.Message != "Stopped syncing offline" {
 		t.Fatalf("toast %q", r.Message)
 	}
 }
@@ -644,7 +644,7 @@ func TestIncludedVia(t *testing.T) {
 	if !ok || song.Position != "toggle" {
 		t.Fatalf("song row %+v in %q", song, titles(page))
 	}
-	if r := d.do("toggle", song.Context); r.Message != "Included via Album 000" {
+	if r := d.do("toggle", song.Context); r.Message != "Offline via Album 000" {
 		t.Fatalf("toast %q", r.Message)
 	}
 	sel, _ := selection.Load(filepath.Join(d.dir, "selection.json"))
@@ -673,8 +673,8 @@ func TestStatusSubtitles(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := d.do("albums")
-	want := map[string]string{"Album 000": "Artist · On Q2", "Album 001": "Artist · Waiting to sync",
-		"Album 002": "Artist · 1 of 3 songs on Q2", "Album 003": "Artist"}
+	want := map[string]string{"Album 000": "Artist · Available offline", "Album 001": "Artist · Waiting to sync",
+		"Album 002": "Artist · 1 of 3 songs offline", "Album 003": "Artist"}
 	for title, sub := range want {
 		if row, _ := find(r, title); row.Subtitle != sub {
 			t.Errorf("%s subtitle %q, want %q", title, row.Subtitle, sub)
@@ -1108,16 +1108,16 @@ func (d *tdaemon) selected(t *testing.T) []selection.Item {
 
 func TestEntireLibraryRow(t *testing.T) {
 	d := newTestDaemon(t, &nav{albums: 3, songsPer: 2, playlists: 2}, "", true)
-	r := d.do("onq2") // Downloads: Sync Entire Library first
+	r := d.do("onq2") // Downloads: Sync Entire Library Offline first
 	row := r.Rows[0]
-	if row.Title != "Sync Entire Library" || row.Subtitle != "Off" || row.URI != "toggle" ||
+	if row.Title != "Sync Entire Library Offline" || row.Subtitle != "Off" || row.URI != "toggle" ||
 		row.Context != "library:all" || row.Position != "toggle" || row.Kind != "action" {
 		t.Fatalf("row %+v", row)
 	}
 	if got := titles(d.do("onq2")); len(got) != 2 || got[1] != "Nothing chosen yet" {
 		t.Fatalf("downloads while off %q", got)
 	}
-	if r := d.do(row.URI, row.Context); r.Message != "Added to Sync · Entire Library" {
+	if r := d.do(row.URI, row.Context); r.Message != "Syncing offline · Entire Library" {
 		t.Fatalf("toast %q", r.Message)
 	}
 	if it := d.selected(t); len(it) != 1 || it[0].Name != "Entire Library" || it[0].Quality != "original" {
@@ -1134,7 +1134,7 @@ func TestEntireLibraryRow(t *testing.T) {
 	if len(r.Rows) != 2 || r.Rows[0].Subtitle != "On · 3 albums · 2 playlists" || r.Rows[1].Title != "Quality: Original" {
 		t.Fatalf("on this q2 while on %q", titles(r))
 	}
-	if r := d.do("toggle", "library:all"); r.Message != "Removed from Sync" {
+	if r := d.do("toggle", "library:all"); r.Message != "Stopped syncing offline" {
 		t.Fatalf("toast %q", r.Message)
 	}
 	if got := d.do("onq2").Rows[0].Subtitle; got != "Off" {
@@ -1165,7 +1165,7 @@ func TestEntireLibraryIncludedVia(t *testing.T) {
 	sel.Toggle(selection.Item{Kind: selection.KindAlbum, ID: "al2", Name: "Album 002"})
 	sel.Save(filepath.Join(d.dir, "selection.json"))
 	for _, key := range []string{"album:al2", "album:al1", "playlist:pl1", "artist:ar1", "song:al0.1"} {
-		if r := d.do("toggle", key); r.Message != "Included via Entire Library" {
+		if r := d.do("toggle", key); r.Message != "Offline via Entire Library" {
 			t.Errorf("%s: toast %q", key, r.Message)
 		}
 	}
@@ -1382,7 +1382,7 @@ func TestPreviewReplaceShowsSize(t *testing.T) {
 }
 
 // Swapping a synced playlist for the album holding the same songs needs no transfer; the songs'
-// items are still recorded, so after a restart the album reads On Q2, not Waiting to sync (I12).
+// items are still recorded, so after a restart the album reads Available offline, not Waiting to sync (I12).
 func TestItemsRecordedWithoutTransfer(t *testing.T) {
 	n := &nav{albums: 1, songsPer: 2}
 	d := newTestDaemon(t, n, "", true)
@@ -1395,7 +1395,7 @@ func TestItemsRecordedWithoutTransfer(t *testing.T) {
 	d.do("check")
 	d.preview(t)
 	d2 := newTestDaemonOn(t, d.card, n, "", true) // a restart: nothing resolved yet
-	if st := d2.view().status(selection.KindAlbum, "al0", 2); st != "On Q2" {
+	if st := d2.view().status(selection.KindAlbum, "al0", 2); st != "Available offline" {
 		t.Errorf("album after restart: %q", st)
 	}
 	if _, ok := find(d2.do("albums"), "Sync Now"); ok {
@@ -1831,7 +1831,7 @@ func (d *tdaemon) syncOK(t *testing.T) {
 	eventually(t, "the sync to finish", func() bool { return d.runner.Snapshot().State == "done" })
 }
 
-// A synced playlist that holds a song twice is On Q2, also after a restart (its server count has
+// A synced playlist that holds a song twice is Available offline, also after a restart (its server count has
 // the duplicate), and so is a chosen empty one: no Sync Now for them (I13).
 func TestPlaylistDuplicateOnQ2(t *testing.T) {
 	n := &nav{albums: 1, songsPer: 3, dup: true}
@@ -1840,7 +1840,7 @@ func TestPlaylistDuplicateOnQ2(t *testing.T) {
 	d.syncOK(t)
 	for _, dd := range []*tdaemon{d, newTestDaemonOn(t, d.card, n, "", true)} {
 		r := dd.do("playlists")
-		if row, _ := find(r, "Mix"); row.Subtitle != "4 songs · On Q2" {
+		if row, _ := find(r, "Mix"); row.Subtitle != "4 songs · Available offline" {
 			t.Errorf("Mix %q", row.Subtitle)
 		}
 		if _, ok := find(r, "Sync Now"); ok {
@@ -1850,7 +1850,7 @@ func TestPlaylistDuplicateOnQ2(t *testing.T) {
 	e := newTestDaemon(t, &nav{albums: 1, songsPer: 0}, "", true)
 	e.do("toggle", "playlist:pl1")
 	e.syncOK(t)
-	if row, _ := find(e.do("playlists"), "Mix"); row.Subtitle != "0 songs · On Q2" {
+	if row, _ := find(e.do("playlists"), "Mix"); row.Subtitle != "0 songs · Available offline" {
 		t.Errorf("empty Mix %q", row.Subtitle)
 	}
 }
@@ -1890,7 +1890,7 @@ func TestOnQ2Pages(t *testing.T) {
 	if len(r.Rows) != 50 || r.Cursor == "" || r.Message != "pages" {
 		t.Fatalf("%d rows, cursor %q, message %q", len(r.Rows), r.Cursor, r.Message)
 	}
-	if r = d.do("onq2", r.Cursor); len(r.Rows) != 21 || r.Rows[20].Title != "Album 069" { // Sync Entire Library leads
+	if r = d.do("onq2", r.Cursor); len(r.Rows) != 21 || r.Rows[20].Title != "Album 069" { // Sync Entire Library Offline leads
 		t.Fatalf("second page %q", titles(r))
 	}
 }
@@ -1993,7 +1993,7 @@ func TestArtistPartialStatus(t *testing.T) {
 	d.do("toggle", "album:al0")
 	d.syncOK(t)
 	d.do("artist", "artist:ar1")
-	if row, _ := find(d.do("artists"), "Artist"); row.Subtitle != "2 albums · 2 of 4 songs on Q2" {
+	if row, _ := find(d.do("artists"), "Artist"); row.Subtitle != "2 albums · 2 of 4 songs offline" {
 		t.Errorf("artist %q", row.Subtitle)
 	}
 }
@@ -2009,7 +2009,7 @@ func TestItemPageUnderLibrary(t *testing.T) {
 		if r.Rows[0].Title == "Sync Now" {
 			r.Rows = r.Rows[1:]
 		}
-		if r.Rows[0].Kind != "info" || r.Rows[0].Title != "Included via Entire Library" {
+		if r.Rows[0].Kind != "info" || r.Rows[0].Title != "Offline via Entire Library" {
 			t.Errorf("%s: %+v", a, r.Rows[0])
 		}
 	}
@@ -2304,7 +2304,7 @@ func TestStoppedDetailsTime(t *testing.T) {
 	}
 }
 
-// A resolved item is On Q2 only when its songs are: a song a server playlist dropped doesn't stand
+// A resolved item is Available offline only when its songs are: a song a server playlist dropped doesn't stand
 // in for the one it gained (review G3, Minor 4).
 func TestResolvedItemCountsItsOwnSongs(t *testing.T) {
 	d := newTestDaemon(t, &nav{albums: 2, songsPer: 2}, "", true)
@@ -2314,7 +2314,7 @@ func TestResolvedItemCountsItsOwnSongs(t *testing.T) {
 	d.resolved["playlist:pl1"] = []subsonic.Song{{ID: "al0.0"}, {ID: "al1.0"}} // al0.1 swapped for al1.0
 	d.mu.Unlock()
 	r := d.do("playlists")
-	if row, _ := find(r, "Mix"); row.Subtitle != "2 songs · 1 of 2 songs on Q2" {
+	if row, _ := find(r, "Mix"); row.Subtitle != "2 songs · 1 of 2 songs offline" {
 		t.Errorf("Mix %q", row.Subtitle)
 	}
 	if _, ok := find(r, "Sync Now"); !ok {
@@ -2723,13 +2723,13 @@ func TestAlbumStatusAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := d.do("albums")
-	for title, sub := range map[string]string{"Album 000": "Artist · On Q2", "Album 001": "Artist · 1 of 3 songs on Q2", "Album 002": "Artist"} {
+	for title, sub := range map[string]string{"Album 000": "Artist · Available offline", "Album 001": "Artist · 1 of 3 songs offline", "Album 002": "Artist"} {
 		if row, _ := find(r, title); row.Subtitle != sub {
 			t.Errorf("%s subtitle %q, want %q", title, row.Subtitle, sub)
 		}
 	}
 	d.do("artist", "artist:ar1") // its albums, al0 and al1
-	if row, _ := find(d.do("artists"), "Artist"); row.Subtitle != "2 albums · 4 of 6 songs on Q2" {
+	if row, _ := find(d.do("artists"), "Artist"); row.Subtitle != "2 albums · 4 of 6 songs offline" {
 		t.Errorf("artist %q", row.Subtitle)
 	}
 }
@@ -2774,7 +2774,7 @@ func TestAlbumBackfilledByCheck(t *testing.T) {
 		t.Error("a second check rewrote the manifest")
 	}
 	d3 := newTestDaemonOn(t, d.card, n, "", true)
-	if row, _ := find(d3.do("albums"), "Album 000"); row.Subtitle != "Artist · On Q2" {
+	if row, _ := find(d3.do("albums"), "Album 000"); row.Subtitle != "Artist · Available offline" {
 		t.Errorf("after a restart: %q", row.Subtitle)
 	}
 }
@@ -2802,7 +2802,7 @@ func TestSyncPageAfterFetches(t *testing.T) {
 	}
 }
 
-// On Q2 Pod with "signin" the action opens the QR page with no toast, and the sign-in stops when
+// Available offline Pod with "signin" the action opens the QR page with no toast, and the sign-in stops when
 // the page's marker goes after it was there, not on a gap in the menu's refresh (the screen off).
 func TestSigninQRPageMarker(t *testing.T) {
 	d := newTestDaemon(t, &nav{}, "signin", false)

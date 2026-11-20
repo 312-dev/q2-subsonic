@@ -497,7 +497,7 @@ func when(t, now time.Time) string {
 	return t.Format("Jan 2 15:04")
 }
 
-// libraryRow is Sync Entire Library: Off, On, or On with the counts once the preview has resolved it.
+// libraryRow is Sync Entire Library Offline: Off, On, or On with the counts once the preview has resolved it.
 func (d *daemon) libraryRow(sel selection.Set) q2spot.Row {
 	sub := "Off"
 	if sel.Has(selection.KindLibrary, "all") {
@@ -510,11 +510,11 @@ func (d *daemon) libraryRow(sel selection.Set) q2spot.Row {
 			sub = fmt.Sprintf("On · %s · %s", plural(c[0], "album"), plural(c[1], "playlist"))
 		}
 	}
-	return q2spot.Row{Kind: "action", URI: "toggle", Title: "Sync Entire Library", Subtitle: sub,
+	return q2spot.Row{Kind: "action", URI: "toggle", Title: "Sync Entire Library Offline", Subtitle: sub,
 		Context: "library:all", Position: "toggle"}
 }
 
-// onQ2 is Downloads: Sync Entire Library first, switched here, then the selection, each with its
+// onQ2 is Downloads: Sync Entire Library Offline first, switched here, then the selection, each with its
 // status and size on the card; a hold takes one out. Entire Library and a song, which have no page of
 // their own, have their Quality here (I25).
 func (d *daemon) onQ2(cursor string) q2spot.Reply {

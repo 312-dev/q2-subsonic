@@ -38,7 +38,7 @@ func TestGotoAlbum(t *testing.T) {
 	n := &nav{albums: 2, songsPer: 2}
 	d := newTestDaemon(t, n, "", true)
 	r := d.do("goto", "album", d.streamed("al1.0"))
-	if got := strings.Join(titles(r), "|"); got != "Add to Sync|Play|Song 0|Song 1" || r.Status != "" {
+	if got := strings.Join(titles(r), "|"); got != "Sync Offline|Play|Song 0|Song 1" || r.Status != "" {
 		t.Fatalf("rows %q, status %q %q", got, r.Status, r.Message)
 	}
 	if q := n.query("getAlbum").Get("id"); q != "al1" {
@@ -65,10 +65,10 @@ func TestGotoArtist(t *testing.T) {
 		t.Errorf("getArtist id %q", q)
 	}
 
-	// an artist of no album of their own (a compilation track, a guest): said, not a lone Add to Sync
+	// an artist of no album of their own (a compilation track, a guest): said, not a lone Sync Offline
 	d = newTestDaemon(t, &nav{albums: 2, songsPer: 2, noAlbums: true}, "", true)
 	r = d.do("goto", "artist", d.streamed("al1.0"))
-	if got := strings.Join(titles(r), "|"); got != "Add to Sync|No albums" {
+	if got := strings.Join(titles(r), "|"); got != "Sync Offline|No albums" {
 		t.Errorf("rows %q", got)
 	}
 

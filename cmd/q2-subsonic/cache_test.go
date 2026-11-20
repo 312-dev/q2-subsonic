@@ -511,7 +511,7 @@ func TestGotoCachedSong(t *testing.T) {
 	d.bg.Wait()
 	p := d.cacheFile(t, "al1.0", 1)
 	r := d.do("goto", "album", p)
-	if got := strings.Join(titles(r), "|"); got != "Add to Sync|Play|Song 0|Song 1" || r.Status != "" {
+	if got := strings.Join(titles(r), "|"); got != "Sync Offline|Play|Song 0|Song 1" || r.Status != "" {
 		t.Fatalf("rows %q, status %q %q", got, r.Status, r.Message)
 	}
 	other := strings.Replace(p, "/"+d.acct()+"/", "/00000000/", 1)

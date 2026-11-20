@@ -98,8 +98,9 @@ func (s settings) stream() string {
 }
 
 // stateKeys is the state file: sign-in's QR keys, hold=1, version, the Server Library's
-// server=up or down, what the app syncs (sync=, syncState) and the server's reach (reach=, srverr=,
-// reach.go), merged so no writer drops another's keys.
+// server=up or down, what the app syncs (sync=, syncState), the server's reach (reach=, srverr=,
+// reach.go) and the answers to the firmware's requests (radioack= and the other *ack= keys,
+// offlineack= among them), merged so no writer drops another's keys.
 type stateKeys struct {
 	st     *q2.State
 	mu     sync.Mutex
@@ -112,8 +113,16 @@ type stateKeys struct {
 	lyrAck string // lyricsack=: the last .lrcask request answered, "<seq> <code>"; "" none
 	covAck string // coverack=: the last .coverask line answered, "<seq> <code>"; "" none
 	resAck string // resumeack=: the last .resume request answered, "<seq> <code>"; "" none
+	offAck string // offlineack=: the last .offline request answered, "<seq> <words>" (offline.go); "" none
 	reach  string // reach=: "down <code>" while the server is out of reach (reach.go); "" none
 	srvErr string // srverr=: the last server failure to toast, "<unix> <code>" (reach.go); "" none
+}
+
+func (s *stateKeys) setOfflineAck(v string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.offAck = v
+	return s.flush()
 }
 
 // setReach sets reach= ("" takes it out) and, unless srvErr is "", srverr=.
@@ -231,6 +240,9 @@ func (s *stateKeys) flush() error {
 	}
 	if s.resAck != "" {
 		m["resumeack"] = s.resAck
+	}
+	if s.offAck != "" {
+		m["offlineack"] = s.offAck
 	}
 	if s.reach != "" {
 		m["reach"] = s.reach
@@ -362,6 +374,7 @@ type daemon struct {
 	cov                coverAskState // the car's cover requests (coverask.go)
 	resume             resumeState   // the firmware's request to resume a restored stream (resume.go)
 	reach              *reach        // whether the server can be reached, for the status row (reach.go)
+	off                offlineState  // the firmware's Sync Offline requests (offline.go)
 
 	bg sync.WaitGroup // the work replies leave running (ping, preview, play, sign-out's stops); tests wait for it
 }
@@ -449,6 +462,7 @@ func newDaemon(dir, card, tmp string) *daemon {
 	d.radioInit()
 	d.lyricsInit()
 	d.resumeInit()
+	d.offlineInit()
 	d.stream.played = d.radioPlayed
 	d.stream.started = func(radio bool) {
 		if !radio {
@@ -642,6 +656,9 @@ func (d *daemon) selection() (selection.Set, error) { return selection.Load(d.se
 // sync runs or is paused: its summary is still to come (M38).
 func (d *daemon) saveSelection(s selection.Set) error {
 	err := s.Save(d.selPath())
+	if err == nil {
+		d.writeOfflineList(s) // the firmware's Sync Offline rows read it (offline.go)
+	}
 	st := d.runner.Snapshot().State
 	d.mu.Lock()
 	d.gen++
@@ -718,6 +735,7 @@ func (d *daemon) tick() {
 	d.lyricsTick()
 	d.coverTick()
 	d.resumeTick()
+	d.offlineTick()
 	if d.caps.Library {
 		d.mu.Lock()
 		d.libPoll()

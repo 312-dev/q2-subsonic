@@ -30,7 +30,7 @@ func TestArtistPageWithArtistWord(t *testing.T) {
 	n := &nav{albums: 5, songsPer: 3, explore: true}
 	d := newTestDaemon(t, n, "artist", true)
 	sameRows(t, "page", d.do("artist", "artist:ar1"),
-		"action toggle Add to Sync |  | artist:ar1",
+		"action toggle Sync Offline |  | artist:ar1",
 		"action play Play |  | artist:ar1 0",
 		"action shuffle Shuffle |  | artist:ar1",
 		"action radio Radio |  | artist:ar1",
@@ -59,7 +59,7 @@ func TestArtistPageWithoutArtistWord(t *testing.T) {
 	n := &nav{albums: 3, songsPer: 3, explore: true}
 	d := newTestDaemon(t, n, "", true)
 	sameRows(t, "page", d.do("artist", "artist:ar1"),
-		"action toggle Add to Sync |  | artist:ar1",
+		"action toggle Sync Offline |  | artist:ar1",
 		"action play Play |  | artist:ar1 0",
 		"action shuffle Shuffle |  | artist:ar1",
 		"action radio Radio |  | artist:ar1",
@@ -82,7 +82,7 @@ func TestArtistPageWithoutArtistWord(t *testing.T) {
 func TestArtistPageWithoutServerData(t *testing.T) {
 	d := newTestDaemon(t, &nav{albums: 2, songsPer: 3}, "artist", true)
 	sameRows(t, "page", d.do("artist", "artist:ar1"),
-		"action toggle Add to Sync |  | artist:ar1",
+		"action toggle Sync Offline |  | artist:ar1",
 		"action play Play |  | artist:ar1 0",
 		"action shuffle Shuffle |  | artist:ar1",
 		"action radio Radio |  | artist:ar1",
@@ -100,7 +100,7 @@ func TestArtistPageWithoutServerData(t *testing.T) {
 		t.Fatal("Top Songs with none")
 	}
 	d = newTestDaemon(t, &nav{albums: 2, songsPer: 3, noAlbums: true}, "artist", true)
-	sameRows(t, "no albums", d.do("artist", "artist:ar1"), "action toggle Add to Sync |  | artist:ar1", "info  No albums |  | ")
+	sameRows(t, "no albums", d.do("artist", "artist:ar1"), "action toggle Sync Offline |  | artist:ar1", "info  No albums |  | ")
 }
 
 // Artist info that doesn't come in time leaves Similar Artists out, and the page is not held up.

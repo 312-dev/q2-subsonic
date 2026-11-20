@@ -127,7 +127,7 @@ func TestArtistPageRows(t *testing.T) {
 	for _, row := range r.Rows {
 		got = append(got, strings.Join([]string{row.Kind, row.URI, row.Title, row.Context}, " "))
 	}
-	want := "action toggle Add to Sync artist:ar1|action play Play artist:ar1 0|action shuffle Shuffle artist:ar1|" +
+	want := "action toggle Sync Offline artist:ar1|action play Play artist:ar1 0|action shuffle Shuffle artist:ar1|" +
 		"action radio Radio artist:ar1|list top Top Songs artist:ar1|list album Album 000 album:al0|list album Album 001 album:al1"
 	if strings.Join(got, "|") != want {
 		t.Fatalf("rows %q", got)
@@ -204,7 +204,7 @@ func TestSearchPlaysOn(t *testing.T) {
 	}
 	d.bg.Wait()
 	d.waitQueued(t, 1)
-	if r := d.do("toggle", row.Context); r.Message != "Added to Sync · 1 song" {
+	if r := d.do("toggle", row.Context); r.Message != "Syncing offline · 1 song" {
 		t.Fatalf("hold: %+v", r)
 	}
 }
