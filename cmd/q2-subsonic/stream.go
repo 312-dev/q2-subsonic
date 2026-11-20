@@ -79,6 +79,8 @@ type streamer struct {
 	// or loses, and pinged of each ping that tells a lost server from one bad song, and its answer.
 	avail  func(path string, kept bool)
 	pinged func(err error)
+	// gaveUp, optional, is told of each song given up (giveUp) with its last try's error.
+	gaveUp func(err error)
 
 	errMu sync.Mutex
 	err   *streamErr
@@ -131,6 +133,15 @@ func (s *streamer) Err() *streamErr {
 	s.errMu.Lock()
 	defer s.errMu.Unlock()
 	return s.err
+}
+
+// giveUp records a song the run gave up on, skipped or stopped at, and tells gaveUp of it (the
+// daemon's server-error toast, reach.go).
+func (s *streamer) giveUp(e *streamErr) {
+	s.setErr(e)
+	if s.gaveUp != nil {
+		s.gaveUp(e.err)
+	}
 }
 
 func (s *streamer) setErr(err *streamErr) {
@@ -541,7 +552,7 @@ func (r *streamRun) failed(i int, err error) (goOn, skipped bool) {
 		}
 	}
 	if r.queue == "" || j.landed || syncer.StopReason(err) != nil || r.skips >= 2 {
-		s.setErr(e)
+		s.giveUp(e)
 		return false, false
 	}
 	select {
@@ -552,12 +563,12 @@ func (r *streamRun) failed(i int, err error) (goOn, skipped bool) {
 	r.jobs, r.songs = slices.Delete(r.jobs, i, i+1), slices.Delete(r.songs, i, i+1)
 	if werr := r.writeQueue(); werr != nil {
 		s.logf("stream: queue: %v", werr)
-		s.setErr(e)
+		s.giveUp(e)
 		return false, false
 	}
 	r.skips++
 	e.skipped = true
-	s.setErr(e)
+	s.giveUp(e)
 	s.logf("stream: skipped %s (%q): %v", sg.ID, sg.Title, err)
 	r.last = min(r.last, len(r.jobs)-1)
 	return r.from < len(r.jobs), true // nothing left to play ends the run
@@ -580,12 +591,12 @@ func (r *streamRun) dropUncached(i int, e *streamErr) (goOn, skipped bool) {
 	}
 	if err := r.writeQueue(); err != nil {
 		r.s.logf("stream: queue: %v", err)
-		r.s.setErr(e)
+		r.s.giveUp(e)
 		return false, false
 	}
 	r.s.logf("stream: server lost, %d songs not on the card taken out of the queue", n-len(r.jobs))
 	e.skipped = true
-	r.s.setErr(e)
+	r.s.giveUp(e)
 	r.last = min(r.last, len(r.jobs)-1)
 	return r.from < len(r.jobs), true
 }

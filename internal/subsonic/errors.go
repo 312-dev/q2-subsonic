@@ -18,6 +18,8 @@ var (
 	ErrAuthMethod  = errors.New("sign-in method not accepted")
 	// ErrAuthKey is a sign-in refused both as an API key and as a password; it is ErrAuth too.
 	ErrAuthKey = fmt.Errorf("wrong password or API key: %w", ErrAuth)
+	// ErrNoName is a server name that doesn't resolve; it is ErrUnreachable too.
+	ErrNoName = fmt.Errorf("server name not found: %w", ErrUnreachable)
 	// ErrStalled is a body that stopped arriving; it is ErrUnreachable too.
 	ErrStalled = fmt.Errorf("server stopped sending: %w", ErrUnreachable)
 	// ErrNotFound is an item the server doesn't have (code 70): deleted, or given a new id when the

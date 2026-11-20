@@ -41,7 +41,10 @@ type Client struct {
 	home *home // the server's address on the home network, tried first there; nil without one
 	hc   *http.Client
 	// Log, when set, receives one redacted line per request.
-	Log  *applog.Log
+	Log *applog.Log
+	// Seen, when set, is told how each API call and each Get ended: nil for an answer that served,
+	// else its error. A request its caller cancelled is not told.
+	Seen func(err error)
 	idle time.Duration // a body Read that waits longer fails; 0 is idleAfter
 	max  time.Duration // an API call that takes longer, headers and body, fails; 0 is no limit
 }
@@ -255,8 +258,17 @@ func (b *idleBody) Close() error {
 	return b.ReadCloser.Close()
 }
 
+// seen tells Seen how a request ended, unless its caller gave it up (ctx ended): that says nothing
+// of the server.
+func (c *Client) seen(ctx context.Context, err error) {
+	if c.Seen != nil && ctx.Err() == nil {
+		c.Seen(err)
+	}
+}
+
 // call performs one API request and decodes the subsonic-response object into out (when not nil).
-func (c *Client) call(ctx context.Context, op string, q url.Values, out any) error {
+func (c *Client) call(ctx context.Context, op string, q url.Values, out any) (err error) {
+	defer func(asked context.Context) { c.seen(asked, err) }(ctx) // the caller's: a call's own limit counts
 	late := func() bool { return false }
 	if c.max > 0 {
 		parent := ctx
@@ -808,7 +820,8 @@ func (c *Client) CoverURLSize(id string, px int) string {
 // Get fetches u, resuming at byte from when from > 0. The caller closes the body. A Subsonic error
 // sent as the body (servers answer 200 with one) is returned as an error, so it is never saved as
 // a song or a cover.
-func (c *Client) Get(ctx context.Context, u string, from int64) (*http.Response, error) {
+func (c *Client) Get(ctx context.Context, u string, from int64) (_ *http.Response, err error) {
+	defer func(asked context.Context) { c.seen(asked, err) }(ctx)
 	op := "get"
 	if pu, err := url.Parse(u); err == nil && pu.Path != "" {
 		op = path.Base(pu.Path)
@@ -857,6 +870,10 @@ func transportKind(err error) error {
 			return ErrUnreachable // the clock is unset and the server's time couldn't be read
 		}
 		return ErrCert
+	}
+	var de *net.DNSError
+	if errors.As(err, &de) && de.IsNotFound {
+		return ErrNoName
 	}
 	return ErrUnreachable
 }

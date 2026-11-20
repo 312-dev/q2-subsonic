@@ -99,7 +99,8 @@ func (s settings) stream() string {
 }
 
 // stateKeys is the state file: sign-in's QR keys, hold=1, version, the Server Library's
-// server=up or down and what the app syncs (sync=, syncState), merged so no writer drops another's keys.
+// server=up or down, what the app syncs (sync=, syncState) and the server's reach (reach=, srverr=,
+// reach.go), merged so no writer drops another's keys.
 type stateKeys struct {
 	st     *q2.State
 	mu     sync.Mutex
@@ -112,6 +113,26 @@ type stateKeys struct {
 	lyrAck string // lyricsack=: the last .lrcask request answered, "<seq> <code>"; "" none
 	covAck string // coverack=: the last .coverask line answered, "<seq> <code>"; "" none
 	resAck string // resumeack=: the last .resume request answered, "<seq> <code>"; "" none
+	reach  string // reach=: "down <code>" while the server is out of reach (reach.go); "" none
+	srvErr string // srverr=: the last server failure to toast, "<unix> <code>" (reach.go); "" none
+}
+
+// setReach sets reach= ("" takes it out) and, unless srvErr is "", srverr=.
+func (s *stateKeys) setReach(reach, srvErr string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reach = reach
+	if srvErr != "" {
+		s.srvErr = srvErr
+	}
+	return s.flush()
+}
+
+// reachNow is reach= as it stands.
+func (s *stateKeys) reachNow() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reach
 }
 
 func (s *stateKeys) setResumeAck(v string) error {
@@ -211,6 +232,12 @@ func (s *stateKeys) flush() error {
 	}
 	if s.resAck != "" {
 		m["resumeack"] = s.resAck
+	}
+	if s.reach != "" {
+		m["reach"] = s.reach
+	}
+	if s.srvErr != "" {
+		m["srverr"] = s.srvErr
 	}
 	return s.st.Write(m)
 }
@@ -336,6 +363,7 @@ type daemon struct {
 	lyr                lyricsState      // the firmware's lyrics requests (lyrics.go)
 	cov                coverAskState    // the car's cover requests (coverask.go)
 	resume             resumeState      // the firmware's request to resume a restored stream (resume.go)
+	reach              *reach           // whether the server can be reached, for the status row (reach.go)
 
 	bg sync.WaitGroup // the work replies leave running (ping, preview, play, sign-out's stops); tests wait for it
 }
@@ -360,6 +388,7 @@ func newDaemon(dir, card, tmp string) *daemon {
 		},
 		free: freeBytes, answerIn: answerIn, signinPort: signinPort, browseTTL: browseTTL,
 		lastReq: time.Now(), resolved: map[string][]subsonic.Song{}, artistAlbums: map[string][]subsonic.Album{}}
+	d.reach = &reach{keys: d.state, now: time.Now}
 	d.signin = &signin{dir: dir, state: d.state, addrs: func() []net.Addr {
 		if d.addrs != nil {
 			return d.addrs()
@@ -417,6 +446,7 @@ func newDaemon(dir, card, tmp string) *daemon {
 		keep = acctDir(c.Server, c.User)
 	}
 	d.stream.avail, d.stream.pinged = d.slAvail, d.slPinged // before the sweep, whose drops tell avail
+	d.stream.gaveUp = d.reach.gaveUp
 	d.slInit()
 	d.radioInit()
 	d.lyricsInit()
@@ -480,6 +510,7 @@ func (d *daemon) client() *subsonic.Client {
 		return nil
 	}
 	cl.Log = d.log
+	cl.Seen = d.reach.seen
 	if h := loadSettings(d.dir).Home; h != "" {
 		if err := cl.Home(h, nearHome(h, d.addrs)); err != nil {
 			d.log.Printf("home address: %v", err) // settings.json edited by hand: the main address only
@@ -516,6 +547,7 @@ func (d *daemon) hostName() string {
 // still play.
 func (d *daemon) signOut() {
 	creds.Remove(d.dir)
+	d.reach.seen(nil) // no server to reach: the status row's mark goes
 	d.mu.Lock()
 	d.cl, d.pinged = nil, false
 	d.cache, d.random, d.listed = nil, nil, songList{}

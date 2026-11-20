@@ -39,6 +39,7 @@ type nav struct {
 	albumArtist      string // the albums' own artist, when not "Artist"
 	albums, songsPer int
 	stall            bool                                                    // every request hangs until the client gives up
+	proxy            atomic.Int32                                            // every request is answered this HTTP status with no body, as a proxy whose server is down
 	trickle          bool                                                    // every request is answered a byte now and then, for ever
 	errCode          int                                                     // every API call fails with this Subsonic code
 	block            chan struct{}                                           // downloads wait for it
@@ -176,6 +177,10 @@ func (n *nav) songs(al int) []map[string]any {
 }
 
 func (n *nav) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s := n.proxy.Load(); s != 0 {
+		w.WriteHeader(int(s))
+		return
+	}
 	if n.stall {
 		<-r.Context().Done()
 		return
