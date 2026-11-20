@@ -607,18 +607,18 @@ func TestLeavingQRPageStopsSignIn(t *testing.T) {
 func TestRootSignedIn(t *testing.T) {
 	d := newTestDaemon(t, &nav{}, "", true)
 	r := d.do("menu")
-	want := []string{"Sync Entire Library", "Sync", "On This Q2", "Playlists", "Albums", "Artists", "Discover", "Search", "Settings"}
+	// only the app's own (the user's, 2026-11-19): the server's music is in the Q2's Library
+	want := []string{"Downloads", "Sync", "Settings"}
 	if got := titles(r); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("titles %q, want %q", got, want)
 	}
-	kinds := []string{"action", "list", "list", "list", "list", "list", "list", "search", "list"}
-	for i, row := range r.Rows {
-		if row.Kind != kinds[i] {
-			t.Errorf("%s kind %q, want %q", row.Title, row.Kind, kinds[i])
+	for i, op := range []string{"onq2", "sync", "settings"} {
+		if r.Rows[i].Kind != "list" || r.Rows[i].URI != op {
+			t.Errorf("%s: %+v", want[i], r.Rows[i])
 		}
 	}
-	if !strings.HasPrefix(r.Rows[2].Subtitle, "0 items · ") {
-		t.Errorf("On This Q2 subtitle %q", r.Rows[2].Subtitle)
+	if r.Rows[0].Subtitle != "Nothing chosen yet" || !strings.HasSuffix(r.Rows[2].Subtitle, " · u") {
+		t.Errorf("subtitles %q, %q", r.Rows[0].Subtitle, r.Rows[2].Subtitle)
 	}
 }
 
@@ -1108,14 +1108,14 @@ func (d *tdaemon) selected(t *testing.T) []selection.Item {
 
 func TestEntireLibraryRow(t *testing.T) {
 	d := newTestDaemon(t, &nav{albums: 3, songsPer: 2, playlists: 2}, "", true)
-	r := d.do("menu")
+	r := d.do("onq2") // Downloads: Sync Entire Library first
 	row := r.Rows[0]
 	if row.Title != "Sync Entire Library" || row.Subtitle != "Off" || row.URI != "toggle" ||
 		row.Context != "library:all" || row.Position != "toggle" || row.Kind != "action" {
 		t.Fatalf("row %+v", row)
 	}
-	if got := titles(d.do("onq2")); len(got) != 1 || got[0] != "Nothing chosen yet" {
-		t.Fatalf("on this q2 while off %q", got)
+	if got := titles(d.do("onq2")); len(got) != 2 || got[1] != "Nothing chosen yet" {
+		t.Fatalf("downloads while off %q", got)
 	}
 	if r := d.do(row.URI, row.Context); r.Message != "Added to Sync · Entire Library" {
 		t.Fatalf("toast %q", r.Message)
@@ -1123,11 +1123,11 @@ func TestEntireLibraryRow(t *testing.T) {
 	if it := d.selected(t); len(it) != 1 || it[0].Name != "Entire Library" || it[0].Quality != "original" {
 		t.Fatalf("selection %+v", it)
 	}
-	if got := d.do("menu").Rows[0].Subtitle; got != "On" {
+	if got := d.do("onq2").Rows[0].Subtitle; got != "On" {
 		t.Fatalf("before resolve %q", got)
 	}
 	d.preview(t)
-	if got := d.do("menu").Rows[0].Subtitle; got != "On · 3 albums · 2 playlists" {
+	if got := d.do("onq2").Rows[0].Subtitle; got != "On · 3 albums · 2 playlists" {
 		t.Fatalf("after resolve %q", got)
 	}
 	r = d.do("onq2")
@@ -1137,7 +1137,7 @@ func TestEntireLibraryRow(t *testing.T) {
 	if r := d.do("toggle", "library:all"); r.Message != "Removed from Sync" {
 		t.Fatalf("toast %q", r.Message)
 	}
-	if got := d.do("menu").Rows[0].Subtitle; got != "Off" {
+	if got := d.do("onq2").Rows[0].Subtitle; got != "Off" {
 		t.Fatalf("after removal %q", got)
 	}
 }
@@ -1181,11 +1181,6 @@ func TestEmptyStates(t *testing.T) {
 		{"albums", "", "No albums", ""},
 		{"artists", "", "No artists", ""},
 		{"search", "x", "No results", ""},
-		{"albumlist", "newest", "No albums", ""},
-		{"albumlist", "random", "No albums", ""},
-		{"starred", "", "Nothing starred", "Star music on the server to see it here"},
-		{"genres", "", "No genres", ""},
-		{"genre", "Rock", "No albums", ""},
 		{"top", "artist:ar1", "No top songs", ""},
 		{"onq2", "", "Nothing chosen yet", "Hold Play/Pause on a playlist, album or artist"},
 	} {
@@ -1664,7 +1659,7 @@ func TestRootStreamErrorLast(t *testing.T) {
 	d.do("play", "album:al0 0")
 	var r q2spot.Reply
 	eventually(t, "the stream error", func() bool { r = d.do("menu"); _, ok := find(r, "Couldn't stream Song 0"); return ok })
-	if r.Rows[0].Title != "Sync Entire Library" {
+	if r.Rows[0].Title != "Downloads" {
 		t.Fatalf("first row %q", titles(r))
 	}
 	det := r.Rows[len(r.Rows)-1]
@@ -1883,7 +1878,7 @@ func TestArtistsFastOnBigLibrary(t *testing.T) {
 	t.Logf("%v", took)
 }
 
-// On This Q2 pages like every list: past 50 chosen items, More… (I21).
+// Downloads pages like every list: past 50 chosen items, More… (I21).
 func TestOnQ2Pages(t *testing.T) {
 	d := newTestDaemon(t, &nav{albums: 70, songsPer: 1}, "pages", true)
 	sel := selection.Set{Version: 1}
@@ -1895,12 +1890,12 @@ func TestOnQ2Pages(t *testing.T) {
 	if len(r.Rows) != 50 || r.Cursor == "" || r.Message != "pages" {
 		t.Fatalf("%d rows, cursor %q, message %q", len(r.Rows), r.Cursor, r.Message)
 	}
-	if r = d.do("onq2", r.Cursor); len(r.Rows) != 20 || r.Rows[19].Title != "Album 069" {
+	if r = d.do("onq2", r.Cursor); len(r.Rows) != 21 || r.Rows[20].Title != "Album 069" { // Sync Entire Library leads
 		t.Fatalf("second page %q", titles(r))
 	}
 }
 
-// Entire Library and a chosen song have their Quality in On This Q2 (I25).
+// Entire Library and a chosen song have their Quality in Downloads (I25).
 func TestOnQ2Quality(t *testing.T) {
 	d := newTestDaemon(t, &nav{albums: 1, songsPer: 2}, "", true)
 	d.do("toggle", "song:al0.1 album:al0 1")
@@ -2191,7 +2186,7 @@ func TestDamagedSelection(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(d.dir, "selection.json.bad")); err != nil {
 		t.Fatal("damaged file not kept aside")
 	}
-	if r := d.do("onq2"); r.Rows[0].Title != "Nothing chosen yet" {
+	if r := d.do("onq2"); r.Rows[1].Title != "Nothing chosen yet" {
 		t.Fatalf("after reset %q", titles(r))
 	}
 }
@@ -2491,7 +2486,7 @@ func TestEntireLibraryCacheReused(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("cached songs differ")
 	}
-	if row := d.do("menu").Rows[0]; row.Subtitle != "On · 3 albums · 1 playlist" {
+	if row := d.do("onq2").Rows[0]; row.Subtitle != "On · 3 albums · 1 playlist" {
 		t.Errorf("Sync Entire Library %q", row.Subtitle)
 	}
 

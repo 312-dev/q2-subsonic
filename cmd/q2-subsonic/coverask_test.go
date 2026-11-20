@@ -168,7 +168,7 @@ func TestCoverAskFailureRemembered(t *testing.T) {
 }
 
 // What isn't a cover of the app's to fetch is answered at once, with no request: a name that could
-// leave the folder, a size it keeps none at, and anything while Show in Library is off.
+// leave the folder, a size it keeps none at, and anything once signed out.
 func TestCoverAskNotOurs(t *testing.T) {
 	r := newCoverRig(t)
 	r.askCover("1 512 ../al0")
@@ -178,7 +178,8 @@ func TestCoverAskNotOurs(t *testing.T) {
 	r.askCover("3 512")
 	r.askCover("4 512 al0 x")
 	r.answered(t, "4 1")
-	r.slToggle(r.settings(), "off")
+	r.signOut()
+	r.bg.Wait()
 	r.askCover("5 512 al0")
 	r.answered(t, "5 1")
 	if n := r.calls("getCoverArt"); n != 0 {

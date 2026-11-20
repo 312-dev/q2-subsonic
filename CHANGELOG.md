@@ -15,6 +15,9 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ### Changed
 
+- The app's first page is now only its own: **Downloads** (what was **On This Q2**, with **Sync Entire Library** at its top), **Sync** and **Settings**, each with a line saying where it stands. Its Playlists, Albums, Artists, Discover and Search pages and the five swipe tabs are gone: while you are signed in, your server's music is in the Q2's own Library. To choose single albums or artists to sync, use **Go to Album** or **Go to Artist** on a song from the server.
+- The server's songs are in the Q2's Library whenever you are signed in: the **Show in Library** setting is gone, and signing out takes them out.
+
 - Stars and likes are separate: a song's stars on the Q2 go to your server as its rating, and a like (the heart) as its star, each on its own, so liking a song no longer sets five stars and rating a song no longer takes its like away. Both come back from the server the same way. Requires a Q2 Muse that keeps likes apart from stars (the firmware's `likes` extension; q2app now says `ratings=2`); on older firmware stars and likes stay on the Q2 until it is updated.
 
 ### Fixed

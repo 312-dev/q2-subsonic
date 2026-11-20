@@ -15,9 +15,9 @@ type Caps struct {
 	// The Server Library's words: the firmware reads a catalogue and keeps stars and likes in step
 	// with the server (q2-coda's docs/server-library.md). The app writes neither's files without its word.
 	Catalogue, Ratings bool
-	// "libsource": the Library's Streaming Songs switch (Local + Server) is the firmware's to set,
-	// and it says which it is in /tmp/q2-addon.library ("server" or "local"). A Show in Library row
-	// of kind "needslib" asks the firmware to turn it on before the row's action is sent.
+	// "libsource": the firmware says in /tmp/q2-addon.library whether its Library shows the server's
+	// songs ("server" or "local"); an older firmware's Streaming Songs switch could say "local", a
+	// firmware with no such switch always says "server". The app pauses on "local".
 	Libsource bool
 	// "signin": a sign-in action's row opens the QR page itself once its refresh makes it a remote
 	// row, the page draws the state file's step (signin.go), and while it is open the firmware keeps

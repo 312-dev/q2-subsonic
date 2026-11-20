@@ -1,11 +1,9 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"math/rand/v2"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,29 +13,19 @@ import (
 	"github.com/andsuor/q2-subsonic/internal/subsonic"
 )
 
-// Discover (the server's own lists, what is starred, genres), shuffle and radio, and an artist's
-// Play, Shuffle and Top Songs. All of it is plain rows and the streamer: no firmware word is needed.
+// Shuffle and radio, and an artist's Play, Shuffle and Top Songs. All of it is plain rows and the
+// streamer: no firmware word is needed.
 
 const (
 	shuffleSongs = 100 // songs a Shuffle asks the server for
 	radioSongs   = 50  // songs of a Radio, and of Top Songs
 	// artistPlayIn is how long an artist's Play or Shuffle may fetch its albums' songs.
 	artistPlayIn = time.Minute
-	// maxGenre is the longest genre name listed, escaped: a row's context must fit the firmware's
+	// maxGenre is the longest index group's name listed (Artists' letters), escaped: a row's context must fit the firmware's
 	// 400 bytes of level arguments with its cursor, or a press on it does nothing.
 	maxGenre = 300
 	notHere  = "Not available on this server" // Top Songs or Radio on a server without it
 )
-
-func (d *daemon) discover() q2spot.Reply {
-	d.mu.Lock()
-	d.random = nil // drawn again when Random Albums is next opened
-	d.mu.Unlock()
-	return q2spot.Reply{Rows: []q2spot.Row{act("shuffle", "Shuffle All", ""),
-		list("albumlist", "Recently Added", "", "newest"), list("albumlist", "Recently Played", "", "recent"),
-		list("albumlist", "Most Played", "", "frequent"), list("albumlist", "Random Albums", "", "random"),
-		list("starred", "Starred", "", ""), list("genres", "Genres", "", "")}}
-}
 
 func (v view) album(a subsonic.Album) q2spot.Row {
 	return v.item(selection.KindAlbum, a.ID, a.Name, a.Artist, a.SongCount)
@@ -89,41 +77,6 @@ func (d *daemon) albumList(ctx context.Context, cl *subsonic.Client, typ, genre 
 	return d.withArt(r, covers, cursor)
 }
 
-// albumLists is one of Discover's album lists. Random Albums is one page, drawn once and kept until
-// Discover is opened again: the firmware asks for a level again after every press and Back, and
-// the list must not change under the user.
-func (d *daemon) albumLists(ctx context.Context, cl *subsonic.Client, typ, cursor string) q2spot.Reply {
-	switch typ {
-	case "newest", "recent", "frequent":
-		return d.albumList(ctx, cl, typ, "", nil, cursor)
-	case "random":
-	default:
-		return q2spot.Fail(q2spot.Bad, "Bad request")
-	}
-	d.mu.Lock()
-	al := d.random
-	d.mu.Unlock()
-	if al == nil {
-		var err error
-		if al, err = cl.AlbumList(ctx, typ, "", 0, q2spot.MaxRows); err != nil {
-			return d.listErr(err, cursor)
-		}
-		d.mu.Lock()
-		d.random = al
-		d.mu.Unlock()
-	}
-	v := d.view()
-	rows := []q2spot.Row{}
-	covers := map[string]string{}
-	for _, a := range al {
-		rows = append(rows, coverRow(v.album(a), covers, a.CoverArt))
-	}
-	if len(rows) == 0 {
-		rows = append(rows, info("No albums"))
-	}
-	return d.withArt(d.page(rows, cursor), covers, cursor)
-}
-
 // starredFound is what is starred, held for browseTTL only: a server may have thousands.
 func (d *daemon) starredFound(ctx context.Context, cl *subsonic.Client) (found, error) {
 	return cached(d, cl, "starred", func() (f found, err error) {
@@ -132,49 +85,6 @@ func (d *daemon) starredFound(ctx context.Context, cl *subsonic.Client) (found, 
 	})
 }
 
-func (d *daemon) starred(ctx context.Context, cl *subsonic.Client, cursor string) q2spot.Reply {
-	f, err := d.starredFound(ctx, cl)
-	if err != nil {
-		return d.listErr(err, cursor)
-	}
-	rows := d.foundRows(f, "starred:")
-	if len(rows) == 0 {
-		rows = []q2spot.Row{{Kind: "info", Title: "Nothing starred", Subtitle: "Star music on the server to see it here"}}
-	}
-	return d.page(rows, cursor)
-}
-
-// genres lists the server's genres by name; one opens its albums.
-func (d *daemon) genres(ctx context.Context, cl *subsonic.Client, cursor string) q2spot.Reply {
-	gs, err := cached(d, cl, "genres", func() ([]subsonic.Genre, error) {
-		gs, err := cl.Genres(ctx)
-		slices.SortFunc(gs, func(a, b subsonic.Genre) int {
-			return cmp.Or(cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)), cmp.Compare(a.Name, b.Name))
-		})
-		return gs, err
-	})
-	if err != nil {
-		return d.listErr(err, cursor)
-	}
-	var rows []q2spot.Row
-	for _, g := range gs {
-		if g.Name == "" || len(q2spot.Escape(g.Name)) > maxGenre {
-			continue
-		}
-		sub := ""
-		if g.AlbumCount > 0 {
-			sub = plural(g.AlbumCount, "album")
-		}
-		rows = append(rows, list("genre", g.Name, sub, g.Name))
-	}
-	if len(rows) == 0 {
-		rows = []q2spot.Row{info("No genres")}
-	}
-	return d.page(rows, cursor)
-}
-
-// top is an artist's Top Songs. getTopSongs takes the artist's name, so the artist is asked for
-// first (its page's answer, while that is kept).
 func (d *daemon) top(ctx context.Context, cl *subsonic.Client, arg, cursor string) q2spot.Reply {
 	_, id := parseKey(arg)
 	key := "top:" + id

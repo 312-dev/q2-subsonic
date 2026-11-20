@@ -64,7 +64,7 @@ func TestStorageTSVListsTheSyncedItems(t *testing.T) {
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
-// The Entire Library and a single song have no page of their own: the firmware opens On This Q2.
+// The Entire Library and a single song have no page of their own: the firmware opens Downloads.
 func TestStorageItemPages(t *testing.T) {
 	for kind, want := range map[string]string{"album": "album", "playlist": "playlist", "artist": "artist", "song": "onq2", "library": "onq2"} {
 		if op, _ := stItem(selection.Kind(kind)); op != want {

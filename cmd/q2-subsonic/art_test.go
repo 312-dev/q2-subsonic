@@ -141,16 +141,14 @@ func TestNoCoversWithoutArt(t *testing.T) {
 	}
 }
 
-// Playlists, Discover's lists, a genre's albums and a tab have covers; Search has none.
+// Playlists and Albums have covers; Search has none.
 func TestCoversOtherLists(t *testing.T) {
 	n := &nav{albums: 3, songsPer: 1, art: true, playlists: 2}
 	plain := newTestDaemon(t, n, "pages sections", true)
 	for _, c := range []struct {
 		args []string
 		file string
-	}{{[]string{"playlists"}, coverName("playlistart", "playlist:pl2")},
-		{[]string{"albumlist", "newest"}, coverName("albumart", "album:al2")}, {[]string{"albumlist", "random"}, coverName("albumart", "album:al2")},
-		{[]string{"genre", "Rock"}, coverName("albumart", "album:al2")}, {[]string{"menu", "albums"}, coverName("albumart", "album:al2")}} {
+	}{{[]string{"playlists"}, coverName("playlistart", "playlist:pl2")}, {[]string{"albums"}, coverName("albumart", "album:al2")}} {
 		d := newTestDaemon(t, n, "pages art sections", true)
 		if r := d.do(c.args[0], c.args[1:]...); r.Message != "refresh" {
 			t.Fatalf("%v: %q", c.args, r.Message)
@@ -501,10 +499,10 @@ func TestCoversOnlyForAlbumAndPlaylistLists(t *testing.T) {
 	if len(have) != 5 {
 		t.Fatalf("files %v", d.covers())
 	}
-	d.do("toggle", "album:al1") // On This Q2 lists it
+	d.do("toggle", "album:al1") // Downloads lists it
 	d.do("toggle", "playlist:pl1")
 	for _, args := range [][]string{{"artist", "artist:ar1"}, {"album", "album:al1"}, {"playlist", "playlist:pl1"},
-		{"search", "x"}, {"starred"}, {"onq2"}, {"menu"}, {"settings"}, {"artists"}, {"discover"}, {"top", "artist:ar1"}} {
+		{"search", "x"}, {"onq2"}, {"menu"}, {"settings"}, {"artists"}, {"top", "artist:ar1"}} {
 		r := d.do(args[0], args[1:]...)
 		if len(r.Rows) == 0 {
 			t.Fatalf("%v: no rows", args)

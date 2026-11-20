@@ -22,7 +22,7 @@ import (
 )
 
 // The Server Library (q2-coda's docs/server-library.md), the app's half: with the firmware's
-// "catalogue" word and Settings' Show in Library on, the app keeps catalogue.tsv, the server's
+// "catalogue" word and the app signed in, the app keeps catalogue.tsv, the server's
 // songs that are not on the card, for the firmware's Library to show beside the card's own; says
 // in the state file whether the server answers (server=up or down); and plays what the firmware
 // asks for from those rows (.catplay). With the "ratings" word too, stars and likes follow a song
@@ -42,7 +42,7 @@ var batteryStatus = "/sys/class/power_supply/battery/status"
 
 // serverLib is the Server Library's state while the app runs.
 type serverLib struct {
-	on        atomic.Bool // Show in Library, as last saved
+	on        atomic.Bool // the firmware takes a catalogue (its "catalogue" word)
 	busy      atomic.Bool // a connection's checks, a walk or a catalogue write runs: one at a time
 	checking  atomic.Bool // a connection's checks or a walk asks the server now: the state file's sync=check
 	streaming atomic.Bool // Streaming Songs, as q2-addon.library last said; always on without "libsource"
@@ -63,7 +63,9 @@ type serverLib struct {
 }
 
 func (d *daemon) slInit() {
-	d.sl.on.Store(d.caps.Catalogue && d.settings().Library)
+	// No setting (the user's, 2026-11-19): on whenever the firmware takes a catalogue; signed in is
+	// slActive's own test.
+	d.sl.on.Store(d.caps.Catalogue)
 	d.sl.streaming.Store(d.slSource())
 	if b, err := os.ReadFile(d.catplayPath()); err == nil {
 		d.sl.catplay = string(b)
@@ -117,7 +119,7 @@ func (d *daemon) playlistsFile() catalogue.Playlists {
 	return catalogue.Playlists{Card: d.card, Path: filepath.Join(d.dir, catalogue.PlaylistsName)}
 }
 
-// slActive is whether the Server Library runs: the firmware's word, Show in Library, signed in,
+// slActive is whether the Server Library runs: the firmware's word, signed in,
 // and on firmware with the "libsource" word, Streaming Songs on.
 func (d *daemon) slActive() bool {
 	return d.caps.Catalogue && d.sl.on.Load() && d.sl.streaming.Load() && d.acct() != ""
@@ -315,7 +317,7 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 
 // coversKey is what a round of covers depends on, read without opening a file: the account, the
 // store, the playlists and the manifest (the synced songs, whose albums are the card's) by size and
-// time, both folders' times (a cover written or deleted, the folder gone with Show in Library or
+// time, both folders' times (a cover written or deleted, the folder gone with
 // Sign Out), and whether the card is above CoverFloor. A round that found nothing it could fetch
 // (slSettle) is not run again until it changes: reading the store and every cover's size took
 // seconds of the Q2's CPU a minute. The stream cache's songs are left out: they keep the cover of
@@ -819,25 +821,12 @@ func (d *daemon) slCatplay() {
 	})
 }
 
-// slSettings is Settings' rows for the Server Library: Show in Library, and while it is on,
-// Resync Library with how the last walk went. The row says On only while the Server Library runs
-// (slActive): Show in Library saved on while Streaming Songs is off is Off, as the Library shows no
-// server songs then. Off on firmware with the "libsource" word, the row is a "needslib" row: the
-// firmware turns Streaming Songs on (asking first) before it sends the press.
+// slSettings is Settings' rows for the Server Library: Resync Library with how the last walk went,
+// while it runs (slActive). There is no Show in Library setting: signed in, the server's songs are in
+// the Q2's Library (the user's, 2026-11-19).
 func (d *daemon) slSettings() []q2spot.Row {
-	if !d.caps.Catalogue {
-		return nil
-	}
 	if !d.slActive() {
-		row := q2spot.Row{Kind: "action", URI: "showlib", Title: "Show in Library: Off",
-			Subtitle: "Streaming songs beside the card's", Context: "on"}
-		if d.caps.Libsource {
-			row.Kind = "needslib"
-		}
-		if d.sl.on.Load() && !d.sl.streaming.Load() {
-			row.Subtitle = "Streaming Songs is off"
-		}
-		return []q2spot.Row{row}
+		return nil
 	}
 	d.sl.mu.Lock()
 	sub := d.sl.note
@@ -853,48 +842,13 @@ func (d *daemon) slSettings() []q2spot.Row {
 		sub = "Checking…"
 	}
 	d.sl.mu.Unlock()
-	return []q2spot.Row{act("showlib", "Show in Library: On", "off"),
-		{Kind: "action", URI: "resync", Title: "Resync Library", Subtitle: sub}}
-}
-
-// slToggle is Show in Library's press. The row names what it turns the setting to, "on" or "off"
-// (slSettings), as the row's On or Off can be the switch's and not the setting's: Show in Library
-// saved on while Streaming Songs is off shows Off, and its "needslib" press comes once the
-// firmware has turned the switch on, so the switch is read first. A press without either turns the
-// saved setting over. On, the server is asked at once; off, the files the firmware reads go (the
-// app's own records stay, so turning it on again needs no first copy).
-func (d *daemon) slToggle(s settings, to string) q2spot.Reply {
-	d.slFollowSource()
-	switch to {
-	case "on":
-		s.Library = true
-	case "off":
-		s.Library = false
-	default:
-		s.Library = !s.Library
-	}
-	if err := d.saveSettings(s); err != nil {
-		return d.settingErr(err)
-	}
-	d.sl.on.Store(s.Library)
-	d.sl.mu.Lock()
-	d.sl.nextPing, d.sl.up = time.Time{}, 0
-	d.sl.mu.Unlock()
-	if !s.Library {
-		catalogue.Remove(d.card, d.dir)
-		catalogue.RemoveCovers(d.card, d.dir)
-		d.state.setServer("")
-	}
-	if s.Library && !d.sl.streaming.Load() { // saved on, but the Library shows no server songs yet
-		return q2spot.Reply{Message: "Needs Streaming Songs"}
-	}
-	return q2spot.Reply{Message: s.libraryName()}
+	return []q2spot.Row{{Kind: "action", URI: "resync", Title: "Resync Library", Subtitle: sub}}
 }
 
 // slResync is Resync Library's press: a walk at the next check, now.
 func (d *daemon) slResync() q2spot.Reply {
 	if !d.slActive() {
-		return q2spot.Fail(q2spot.Unavailable, "Show in Library is off")
+		return q2spot.Fail(q2spot.Unavailable, "The Library has no server songs")
 	}
 	d.sl.mu.Lock()
 	d.sl.resync, d.sl.nextPing = true, time.Time{}
@@ -916,8 +870,4 @@ func (d *daemon) slSignOut() {
 	d.sl.mu.Lock()
 	d.sl.up, d.sl.due, d.sl.resync, d.sl.songs, d.sl.walked, d.sl.errMsg = 0, false, false, 0, time.Time{}, ""
 	d.sl.mu.Unlock()
-}
-
-func (s settings) libraryName() string {
-	return fmt.Sprintf("Show in Library: %s", map[bool]string{true: "On", false: "Off"}[s.Library])
 }

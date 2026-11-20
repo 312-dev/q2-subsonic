@@ -50,9 +50,6 @@ func nextQuality(q string) string {
 	return qualities[1]
 }
 
-// tabs are the first page's tabs served by their own op; Home is menu's.
-var tabs = map[string]bool{"discover": true, "playlists": true, "albums": true, "artists": true}
-
 var searchRow = q2spot.Row{Kind: "search", Title: "Search"}
 
 func info(title string) q2spot.Row { return q2spot.Row{Kind: "info", Title: title} }
@@ -231,20 +228,12 @@ func (d *daemon) reply(req q2spot.Request) q2spot.Reply {
 	d.mu.Lock()
 	d.lastReq = time.Now()
 	d.mu.Unlock()
-	// A tab of the first page (menu's sections) is menu with the tab's name: its list, led by
-	// Search. By op and argument alone, never by depth: More… and a page row ask for a tab's later
-	// rows as "menu <tab> <cursor>". Signed out, menu answers for every tab with the sign-in row.
-	tab := false
-	if req.Op == "menu" && d.caps.Sections && tabs[req.Arg(0)] && d.client() != nil {
-		d.signedIn()
-		req, tab = q2spot.Request{ID: req.ID, Op: req.Arg(0), Args: req.Args[1:]}, true
-	}
 	switch req.Op {
 	case "menu":
 		return d.menu(req.Arg(0))
 	case "details":
 		return details(req.Arg(0))
-	case "settings", "defq", "streamq", "report", "cachesz", "cacheclr", "showlib", "resync":
+	case "settings", "defq", "streamq", "report", "cachesz", "cacheclr", "resync":
 		return d.settingsOp(req.Op, req.Arg(0))
 	case "onq2":
 		return d.onQ2(req.Arg(0))
@@ -275,7 +264,7 @@ func (d *daemon) reply(req q2spot.Request) q2spot.Reply {
 	switch req.Op {
 	case "playlists", "artists", "albums":
 		key, cursor := keyed(req)
-		return d.withLead(d.browse(ctx, cl, req.Op, key, cursor), cursor, tab)
+		return d.withLead(d.browse(ctx, cl, req.Op, key, cursor), cursor, false)
 	case "albumsort":
 		return q2spot.Reply{Rows: []q2spot.Row{list("albums", "Recently Added", "", "newest"),
 			list("albums", "By Artist", "", "artist"), list("albums", "By Year", "", "year")}}
@@ -285,21 +274,6 @@ func (d *daemon) reply(req q2spot.Request) q2spot.Reply {
 		return d.withLead(d.gotoPage(ctx, cl, req.Arg(0), req.Arg(1), req.Arg(2)), req.Arg(2), false)
 	case "search":
 		return d.withLead(d.search(ctx, cl, req.Arg(0), req.Arg(1)), req.Arg(1), false)
-	case "discover":
-		r := d.discover()
-		if tab {
-			r.Rows = append([]q2spot.Row{searchRow}, r.Rows...)
-		}
-		return r
-	case "albumlist":
-		return d.withLead(d.albumLists(ctx, cl, req.Arg(0), req.Arg(1)), req.Arg(1), false)
-	case "starred":
-		return d.withLead(d.starred(ctx, cl, req.Arg(0)), req.Arg(0), false)
-	case "genres":
-		return d.genres(ctx, cl, req.Arg(0))
-	case "genre":
-		head := []q2spot.Row{act("shuffle", "Shuffle", "genre:"+req.Arg(0))}
-		return d.withLead(d.albumList(ctx, cl, "byGenre", req.Arg(0), head, req.Arg(1)), req.Arg(1), false)
 	case "top":
 		return d.withLead(d.top(ctx, cl, req.Arg(0), req.Arg(1)), req.Arg(1), false)
 	case "singles": // the rows of an artist's page for firmware with "artist" (device_artist.go)
@@ -399,10 +373,9 @@ func details(ctx string) q2spot.Reply {
 // a gap in the 2 s refresh, which pauses while the QR page is on top (and while the screen is off).
 // The last failure stays as the row's subtitle (I24).
 //
-// On Q2 Pod with "sections" the signed-in root names the first page's tabs instead, each a row the
-// firmware asks as "menu <context>" and swipes between; sec is that context. Home is served here,
-// the others by their own ops (reply). A tab's first row, Search, is the title bar's glass where
-// the theme has a title bar.
+// Signed in it holds only what is the app's own: Downloads (what is chosen to sync, Sync Entire
+// Library first), Sync and Settings, each with its second line (the user's, 2026-11-19). The server's
+// music is in the Q2's Library (catalogue.go), so the app has no browse rows, sections or Search.
 func (d *daemon) menu(sec string) q2spot.Reply {
 	now := time.Now()
 	d.mu.Lock()
@@ -422,28 +395,24 @@ func (d *daemon) menu(sec string) q2spot.Reply {
 		return q2spot.Reply{Message: "refresh", Rows: []q2spot.Row{row}}
 	}
 	d.signedIn()
-	if d.caps.Sections && sec == "" {
-		return q2spot.Reply{Message: "sections", Rows: []q2spot.Row{list("menu", "Home", "", "home"),
-			list("menu", "Discover", "", "discover"), list("menu", "Playlists", "", "playlists"),
-			list("menu", "Albums", "", "albums"), list("menu", "Artists", "", "artists")}}
-	}
 	sel, serr := d.selection()
 	m := d.manifest()
 	var bytes int64
 	for _, e := range m.Songs {
 		bytes += e.Size
 	}
-	onq2 := plural(len(sel.Items), "item") + " · " + size(bytes)
+	downloads := plural(len(m.Songs), "song") + " · " + size(bytes)
 	if serr != nil {
-		onq2 = "Selection file is damaged"
+		downloads = "Selection file is damaged"
+	} else if len(sel.Items) == 0 {
+		downloads = "Nothing chosen yet"
 	}
-	rows := []q2spot.Row{d.libraryRow(sel), list("sync", "Sync", d.syncSubtitle(cl), ""),
-		list("onq2", "On This Q2", onq2, ""),
-		list("playlists", "Playlists", "", ""), list("albums", "Albums", "", ""), list("artists", "Artists", "", ""),
-		list("discover", "Discover", "", ""), searchRow, list("settings", "Settings", "", "")}
-	if d.caps.Sections { // Home keeps the lists' rows: tabs change by swipe only, the wheel can't reach them
-		rows = append([]q2spot.Row{searchRow}, append(rows[:7:7], rows[8])...)
-	}
+	host := d.hostName()
+	d.mu.Lock()
+	acct := host + " · " + d.user
+	d.mu.Unlock()
+	rows := []q2spot.Row{list("onq2", "Downloads", downloads, ""), list("sync", "Sync", d.syncSubtitle(cl), ""),
+		list("settings", "Settings", acct, "")}
 	// Last, so the rows above keep their places under the cursor (M33).
 	if e := d.stream.Err(); e != nil {
 		op, h, code := "stream", 0, 0
@@ -545,9 +514,9 @@ func (d *daemon) libraryRow(sel selection.Set) q2spot.Row {
 		Context: "library:all", Position: "toggle"}
 }
 
-// onQ2 is the selection, each with its status and size on the card; a hold takes one out. Entire
-// Library is switched from the root; here it shows only while on, as one of the items. Entire
-// Library and a song, which have no page of their own, have their Quality here (I25).
+// onQ2 is Downloads: Sync Entire Library first, switched here, then the selection, each with its
+// status and size on the card; a hold takes one out. Entire Library and a song, which have no page of
+// their own, have their Quality here (I25).
 func (d *daemon) onQ2(cursor string) q2spot.Reply {
 	if _, err := d.selection(); err != nil {
 		return damagedSelection()
@@ -555,8 +524,11 @@ func (d *daemon) onQ2(cursor string) q2spot.Reply {
 	v := d.view()
 	var rows []q2spot.Row
 	if len(v.sel.Items) == 0 {
-		return q2spot.Reply{Rows: []q2spot.Row{{Kind: "info", Title: "Nothing chosen yet",
+		return q2spot.Reply{Rows: []q2spot.Row{d.libraryRow(v.sel), {Kind: "info", Title: "Nothing chosen yet",
 			Subtitle: "Hold Play/Pause on a playlist, album or artist"}}}
+	}
+	if !v.sel.Has(selection.KindLibrary, "all") {
+		rows = append(rows, d.libraryRow(v.sel))
 	}
 	for _, it := range v.sel.Items {
 		key := selection.Key(it.Kind, it.ID)
@@ -588,9 +560,8 @@ var settingsMu sync.Mutex
 
 const clearWithin = 10 * time.Second // Clear Cache's second press
 
-// settingsOp answers Settings and its rows' presses; arg is the pressed row's context, which only
-// Show in Library's rows carry (slSettings).
-func (d *daemon) settingsOp(op string, arg ...string) q2spot.Reply {
+// settingsOp answers Settings and its rows' presses.
+func (d *daemon) settingsOp(op string, _ ...string) q2spot.Reply {
 	settingsMu.Lock()
 	defer settingsMu.Unlock()
 	s := d.settings()
@@ -646,8 +617,6 @@ func (d *daemon) settingsOp(op string, arg ...string) q2spot.Reply {
 			d.stream.plays.clear()
 		}
 		return q2spot.Reply{Message: s.reportName()}
-	case "showlib":
-		return d.slToggle(s, append(arg, "")[0])
 	case "resync":
 		return d.slResync()
 	}

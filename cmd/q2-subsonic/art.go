@@ -45,14 +45,13 @@ var jfif = []byte("\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\
 
 // Which lists show covers: this is the one place that says. The firmware draws a whole list in its
 // cover layout (78 px rows, the cover's room at the left of every one) as soon as one of its rows
-// has a file, so only a list that is all albums or all playlists gets any: Albums in each order,
-// Playlists, Discover's album lists and a genre's albums, where the only other rows are the lead
-// ones (Search, Sort, a genre's Shuffle, Sync Now, the page rows, More…). Never an artist's page,
-// an album's or playlist's own, On This Q2, Search, Starred, Home or Settings.
+// has a file, so only a list that is all albums or all playlists gets any: Albums in each order and
+// Playlists, where the only other rows are the lead ones (Sort, Sync Now, the page rows, More…). Never an artist's page,
+// an album's or playlist's own, Downloads, Search or Settings.
 //
 // Such a list builds its rows with coverRow, and want takes no other row. A cover row opens its
 // page by an op of its own (artOp), because the file is named by the row's key alone: with the
-// item's own op, the same album on an artist's page, in a search or on On This Q2 would have the
+// item's own op, the same album on an artist's page, in a search or on Downloads would have the
 // same key, find the file Albums left, and turn that page to the cover layout.
 const artOp = "art" // "albumart" and "playlistart" are "album" and "playlist" (reply)
 

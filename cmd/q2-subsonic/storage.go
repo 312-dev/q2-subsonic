@@ -105,7 +105,7 @@ func (d *daemon) stTake() bool {
 	return true
 }
 
-// stRemove takes an item out of Sync, as On This Q2's hold does: its songs go at the next Sync.
+// stRemove takes an item out of Sync, as Downloads's hold does: its songs go at the next Sync.
 func (d *daemon) stRemove(key string) {
 	kind, id := parseKey(key)
 	sel, err := d.selection()
@@ -147,7 +147,7 @@ func (d *daemon) stOwn() int64 {
 	return own
 }
 
-// stItem is where the firmware opens an item: its page in the app, or On This Q2 for the Entire
+// stItem is where the firmware opens an item: its page in the app, or Downloads for the Entire
 // Library and a single song, which have none.
 func stItem(kind selection.Kind) (op string, arg bool) {
 	switch kind {

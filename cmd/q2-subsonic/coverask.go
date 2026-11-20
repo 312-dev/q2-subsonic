@@ -30,7 +30,7 @@ import (
 // Answers to a .coverask line, in the state file's coverack=<seq> <code>.
 const (
 	coverSaved   = 0 // the file is there: the firmware sends it
-	coverNotOurs = 1 // not one of the app's: a bad line, a size it keeps none at, Show in Library off
+	coverNotOurs = 1 // not one of the app's: a bad line, a size it keeps none at, signed out
 	coverNone    = 2 // the server has none for the album (noted in .none)
 	coverFailed  = 3 // not fetched: signed out, the server out of reach, or no room on the card
 )

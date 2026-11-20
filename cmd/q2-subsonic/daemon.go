@@ -49,7 +49,6 @@ type settings struct {
 	StreamQuality  string `json:"streamQuality,omitempty"`
 	NoReport       bool   `json:"noReport,omitempty"`
 	StreamCacheMB  int    `json:"streamCacheMB,omitempty"`
-	Library        bool   `json:"library,omitempty"`          // Show in Library (catalogue.go)
 	Home           string `json:"home,omitempty"`             // the server's home address (home.go)
 	LimitMB        int    `json:"downloadsLimitMB,omitempty"` // Downloads' limit in MB, 0 for none (storage.go)
 }
@@ -353,17 +352,16 @@ type daemon struct {
 	wasBusy            bool      // the runner, at the last tick
 	cache              []cacheEntry
 	browseTTL          time.Duration
-	random             []subsonic.Album // Random Albums as last drawn, until Discover is opened again
-	listed             songList         // the song list shown last
-	clearAt            time.Time        // Clear Cache's first press: a second one soon after clears
-	sl                 serverLib        // the Server Library (catalogue.go)
-	qrSeen             bool             // the QR page's marker was there since the sign-in started (qrLeft)
-	st                 stState          // Settings > Storage's files (storage.go)
-	radio              radioState       // the radio playing and its recent songs (radio.go)
-	lyr                lyricsState      // the firmware's lyrics requests (lyrics.go)
-	cov                coverAskState    // the car's cover requests (coverask.go)
-	resume             resumeState      // the firmware's request to resume a restored stream (resume.go)
-	reach              *reach           // whether the server can be reached, for the status row (reach.go)
+	listed             songList      // the song list shown last
+	clearAt            time.Time     // Clear Cache's first press: a second one soon after clears
+	sl                 serverLib     // the Server Library (catalogue.go)
+	qrSeen             bool          // the QR page's marker was there since the sign-in started (qrLeft)
+	st                 stState       // Settings > Storage's files (storage.go)
+	radio              radioState    // the radio playing and its recent songs (radio.go)
+	lyr                lyricsState   // the firmware's lyrics requests (lyrics.go)
+	cov                coverAskState // the car's cover requests (coverask.go)
+	resume             resumeState   // the firmware's request to resume a restored stream (resume.go)
+	reach              *reach        // whether the server can be reached, for the status row (reach.go)
 
 	bg sync.WaitGroup // the work replies leave running (ping, preview, play, sign-out's stops); tests wait for it
 }
@@ -550,7 +548,7 @@ func (d *daemon) signOut() {
 	d.reach.seen(nil) // no server to reach: the status row's mark goes
 	d.mu.Lock()
 	d.cl, d.pinged = nil, false
-	d.cache, d.random, d.listed = nil, nil, songList{}
+	d.cache, d.listed = nil, songList{}
 	d.dropPreview()
 	d.playSeq++ // a play still waiting for playMu is dropped
 	d.mu.Unlock()
@@ -673,7 +671,7 @@ func damagedSelection() q2spot.Reply {
 	return q2spot.Reply{Rows: []q2spot.Row{info("Selection file is damaged"), act("resetsel", "Reset Selection", "")}}
 }
 
-const selDamaged = "Selection file is damaged: reset it in On This Q2"
+const selDamaged = "Selection file is damaged: reset it in Downloads"
 
 func (d *daemon) settings() settings { return loadSettings(d.dir) }
 

@@ -338,9 +338,9 @@ func changes(p plan.Plan) bool {
 // past limit (Settings > Storage > Downloads' Limit on Q2 Pod), which offers no Start.
 func previewRows(p *plan.Plan, reclaim, over, limit int64) q2spot.Reply {
 	var rows []q2spot.Row
-	if p.Held > 0 { // its songs stay; On This Q2 marks it, to take out
+	if p.Held > 0 { // its songs stay; Downloads marks it, to take out
 		rows = append(rows, q2spot.Row{Kind: "info", Title: plural(p.Held, "item") + " no longer on the server",
-			Subtitle: "Its songs stay · Remove it in On This Q2"})
+			Subtitle: "Its songs stay · Remove it in Downloads"})
 	}
 	if !changes(*p) {
 		return q2spot.Reply{Rows: append(rows, info("Everything is up to date"))}
