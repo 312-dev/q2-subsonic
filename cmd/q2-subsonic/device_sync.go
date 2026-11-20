@@ -774,6 +774,7 @@ func (d *daemon) syncDone(p plan.Plan) {
 	d.mu.Lock()
 	d.lastReq = time.Now() // the summary and Failed Songs stay as long as after a press (I15)
 	d.st.pending = true    // Storage's sizes (storage.go)
+	d.st.stale = true      // and .subsonic/'s, walked again (storage.go stOwn)
 	d.mu.Unlock()
 	snap := d.runner.Snapshot() // what the run did, for Diagnostics
 	var b int64

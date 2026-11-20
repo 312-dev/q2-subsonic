@@ -194,5 +194,6 @@ func (d *daemon) coverFor(px, id string) int {
 		return fail(err)
 	}
 	d.log.Printf("covers: the car's %s (%s px) saved, %d KiB", id, px, len(jpg)>>10)
+	d.stWrote()
 	return coverSaved
 }

@@ -150,3 +150,58 @@ func TestCapsStorage(t *testing.T) {
 		t.Fatalf("%+v", c)
 	}
 }
+
+// The storage walk stats every file under .subsonic/ (about 4 s of CPU on a Q2 with its covers), so it
+// runs at the app's start, at once when the Storage page opens (the firmware's "look"), and after the
+// app wrote there at most every stWalkEvery, never on a timer alone: a 30-minute session with nothing
+// written and the page shut walked three times before.
+func TestStorageWalksWhenItsAnswerCanChange(t *testing.T) {
+	d := newTestDaemon(t, &nav{}, "storage", true)
+	os.MkdirAll(filepath.Join(d.dir, "covers"), 0o755)
+	os.WriteFile(filepath.Join(d.dir, "covers", "a.jpg"), []byte("1234"), 0o644)
+	walks := func() int { return strings.Count(d.logText(t), "job storage walk: start") }
+	aged := func() { // the last walk stWalkEvery ago
+		d.mu.Lock()
+		d.st.ownAt = d.st.ownAt.Add(-stWalkEvery)
+		d.mu.Unlock()
+	}
+	first := d.stOwn()
+	if walks() != 1 {
+		t.Fatalf("%d walks at the start", walks())
+	}
+	aged()
+	if d.stOwn() != first || walks() != 1 {
+		t.Fatalf("%d walks with nothing written and the page shut", walks())
+	}
+	// the page opens: walked at once, a cover written over USB counted
+	os.WriteFile(filepath.Join(d.dir, "covers", "b.jpg"), []byte("123456"), 0o644)
+	os.WriteFile(filepath.Join(d.dir, storageOut), []byte("\nlook\n"), 0o644)
+	if !d.stTake() || d.stOwn() < first+6 || walks() != 2 { // the app's log grows there too
+		t.Fatalf("%d walks after the page opened", walks())
+	}
+	// while it may still be open, as often as stWalkEvery
+	aged()
+	d.stOwn()
+	if walks() != 3 {
+		t.Fatalf("%d walks while the page may be open", walks())
+	}
+	d.mu.Lock()
+	d.st.lookAt = d.st.lookAt.Add(-stLookFor)
+	d.mu.Unlock()
+	// the app writes: walked again, but not before stWalkEvery
+	d.stWrote()
+	d.stOwn()
+	if walks() != 3 {
+		t.Fatalf("%d walks within stWalkEvery of a write", walks())
+	}
+	aged()
+	d.stOwn()
+	if walks() != 4 {
+		t.Fatalf("%d walks stWalkEvery after a write", walks())
+	}
+	aged()
+	d.stOwn()
+	if walks() != 4 {
+		t.Fatalf("%d walks once the write was counted", walks())
+	}
+}

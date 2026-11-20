@@ -310,6 +310,9 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 	wg.Wait()
 	d.log.Printf("server library: covers (%d px): %d saved, %d without, %d left, %d KiB in %v", cv.Side(), saved, none,
 		len(pass.Todo)-saved-none, pass.Used()>>10, time.Since(start).Round(time.Millisecond))
+	if saved > 0 {
+		d.stWrote()
+	}
 	if errors.Is(lost, catalogue.ErrCardFull) {
 		d.slSettle() // no room: asked again once the card or the albums change
 	}

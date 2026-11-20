@@ -34,7 +34,8 @@ const (
 	storageName = "storage.tsv"
 	storageOut  = "storage.out"
 	stEvery     = 30 * time.Second // storage.tsv is brought up to date this often while the app runs
-	stWalkEvery = 10 * time.Minute // .subsonic/ outside the stream cache is walked this often
+	stWalkEvery = 10 * time.Minute // .subsonic/ outside the stream cache is walked at most this often (stOwn)
+	stLookFor   = 30 * time.Minute // after the Storage page opens, it may still be open this long (stOwn)
 )
 
 // limitSizes are Downloads' Limit choices in MB, the firmware's; 0 is none.
@@ -46,12 +47,22 @@ type stState struct {
 	at      time.Time // when it was brought up to date last
 	own     int64     // .subsonic/ less the stream cache, as walked last
 	ownAt   time.Time
+	stale   bool        // the app wrote under .subsonic/ since that walk (a sync, a cover saved)
+	look    bool        // the Storage page opened since that walk: walk at once
+	lookAt  time.Time   // when it last opened
 	pending bool        // something changed: write at the next tick
 	busy    atomic.Bool // a write runs (it may walk the folder: off the tick)
 }
 
 // limitBytes is the Downloads limit, 0 for none.
 func (s settings) limitBytes() int64 { return int64(max(s.LimitMB, 0)) * 1e6 }
+
+// stWrote notes that the app wrote under .subsonic/ outside the stream cache (stOwn).
+func (d *daemon) stWrote() {
+	d.mu.Lock()
+	d.st.stale = true
+	d.mu.Unlock()
+}
 
 // stTick takes storage.out and brings storage.tsv up to date: at once after a request, else every
 // stEvery.
@@ -69,7 +80,8 @@ func (d *daemon) stTick() {
 }
 
 // stTake applies storage.out's lines, taken by renaming the file so the firmware's next append
-// starts a new one; a file a crash left taken is applied first. Whether it took any.
+// starts a new one; a file a crash left taken is applied first. Whether it took any. "look" is the
+// Storage page opening (the firmware's storage.c): .subsonic/ is walked again for it.
 func (d *daemon) stTake() bool {
 	out, taking := filepath.Join(d.dir, storageOut), filepath.Join(d.dir, storageOut+".taking")
 	if _, err := os.Stat(taking); err != nil {
@@ -99,6 +111,10 @@ func (d *daemon) stTake() bool {
 			settingsMu.Unlock()
 		case "remove":
 			d.stRemove(arg)
+		case "look":
+			d.mu.Lock()
+			d.st.look, d.st.lookAt = true, time.Now()
+			d.mu.Unlock()
 		}
 	}
 	os.Remove(taking)
@@ -118,13 +134,21 @@ func (d *daemon) stRemove(key string) {
 	}
 }
 
-// stOwn is the size of .subsonic/ less the stream cache, walked at most every stWalkEvery (covers
-// are thousands of files); the stream cache's own count is live.
+// stOwn is the size of .subsonic/ less the stream cache; the stream cache's own count is live. The
+// walk stats every file (covers are thousands: about 4 s of CPU on a Q2), so it runs only when its
+// answer can be seen to change: at the app's start; at once when the Storage page opens (look); and
+// at most every stWalkEvery after the app wrote there (stale), or while the page may still be open
+// (stLookFor after it opened). Otherwise the last walk's total stands. A file removed over USB or
+// LocalSend while the app runs is counted at the page's next opening, and within stWalkEvery
+// while the page is open.
 func (d *daemon) stOwn() int64 {
 	d.mu.Lock()
 	own, at := d.st.own, d.st.ownAt
+	due := at.IsZero() || d.st.look ||
+		(d.st.stale || time.Since(d.st.lookAt) < stLookFor) && time.Since(at) >= stWalkEvery
+	d.st.look, d.st.stale = d.st.look && !due, d.st.stale && !due
 	d.mu.Unlock()
-	if !at.IsZero() && time.Since(at) < stWalkEvery {
+	if !due {
 		return own
 	}
 	stream := d.stream.dir()
