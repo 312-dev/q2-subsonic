@@ -233,6 +233,10 @@ func (d *daemon) reply(req q2spot.Request) q2spot.Reply {
 		return d.menu(req.Arg(0))
 	case "details":
 		return details(req.Arg(0))
+	case "diagnostics":
+		return d.diagnostics(req.Arg(0))
+	case "event":
+		return d.eventPage(req.Arg(0))
 	case "settings", "defq", "streamq", "report", "cachesz", "cacheclr", "resync":
 		return d.settingsOp(req.Op, req.Arg(0))
 	case "onq2":
@@ -347,23 +351,6 @@ func withErr(ctx string, err error) string {
 	return ctx + "|" + strings.ReplaceAll(applog.Redact(err.Error()), "|", "/")
 }
 
-func details(ctx string) q2spot.Reply {
-	f := strings.SplitN(ctx, "|", 6)
-	for len(f) < 6 {
-		f = append(f, "")
-	}
-	unix, _ := strconv.ParseInt(f[3], 10, 64)
-	rows := []q2spot.Row{info("Op: " + f[0]), info("HTTP: " + f[1]), info("Code: " + f[2]),
-		info("Time: " + time.Unix(unix, 0).UTC().Format("2006-01-02 15:04:05 UTC"))}
-	if f[4] != "" {
-		rows = append(rows, info("Song: "+f[4]))
-	}
-	if f[5] != "" {
-		rows = append(rows, info("Error: "+f[5]))
-	}
-	return q2spot.Reply{Rows: rows}
-}
-
 // menu is the root. Signed out it is the phone sign-in, kept live so the root turns into the
 // signed-in menu once the phone succeeds. The sign-in page (a port on the LAN, and hold=1) starts
 // only when its action row is pressed; the row then opens the QR page (remote, which sends
@@ -413,15 +400,6 @@ func (d *daemon) menu(sec string) q2spot.Reply {
 	d.mu.Unlock()
 	rows := []q2spot.Row{list("onq2", "Downloads", downloads, ""), list("sync", "Sync", d.syncSubtitle(cl), ""),
 		list("settings", "Settings", acct, "")}
-	// Last, so the rows above keep their places under the cursor (M33).
-	if e := d.stream.Err(); e != nil {
-		op, h, code := "stream", 0, 0
-		var ae *subsonic.APIError
-		if errors.As(e, &ae) {
-			op, h, code = ae.Op, ae.HTTP, ae.Code
-		}
-		rows = append(rows, info(e.Error()), list("details", "Details", "", detailsCtx(op, h, code, e.at, e.id)))
-	}
 	return q2spot.Reply{Message: "refresh", Rows: rows}
 }
 
@@ -640,6 +618,7 @@ func (d *daemon) settingsOp(op string, _ ...string) q2spot.Reply {
 	}
 	rows = append(rows, act("report", s.reportName(), ""))
 	rows = append(rows, d.slSettings()...)
+	rows = append(rows, list("diagnostics", "Diagnostics", d.diagLatest(), "")) // what went wrong, and the syncs
 	return q2spot.Reply{Rows: append(rows, list("account", "Account", user, ""),
 		info("Version "+strings.TrimPrefix(version, "q2-v")))}
 }

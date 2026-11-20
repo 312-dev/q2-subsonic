@@ -146,7 +146,7 @@ func TestMigrateFailureShowsErrorRow(t *testing.T) {
 		t.Fatal("no Details row")
 	}
 	// not a file in the way: Details say what went wrong (review G3, Minor 10)
-	if got := strings.Join(titles(d.do(det.URI, det.Context)), "|"); !strings.Contains(got, "Error: ") {
+	if got := strings.Join(pairs(d.do(det.URI, det.Context)), "|"); !strings.Contains(got, "Error=") {
 		t.Errorf("details %q", got)
 	}
 	if _, err := os.Stat(filepath.Join(card, "Navidrome")); err != nil {

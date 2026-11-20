@@ -15,6 +15,10 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ### Changed
 
+- **Settings → Diagnostics** lists what went wrong and the syncs, newest first, kept for a week: a song skipped or that couldn't stream, the server going out of reach, a sync that finished or stopped, each with why and when. A row opens its **Details** in plain words (what, while doing what, why, when, the song, the server, and a sentence on what it means) instead of "Op: stream". The first page no longer shows a loose "Skipped …" row.
+- A song that can't be fetched because the server is out of reach, or a proxy answers 502, 503 or 504 for it, is waited for instead of skipped, so Now Playing can say why and offer Retry and Skip; a list played from the Q2's Library no longer drops its songs that aren't on the card.
+- The app's log says when its background jobs start and how long they take (the storage walk, the server library's checks).
+
 - **Sync** on a Q2 Muse that draws it is one centred screen per state, as a phone's software update: Checking for changes, Up to date, N new songs with **Sync Now**, Syncing with a progress bar and **Stop**, Couldn't reach the server with **Try Again**, Nothing to sync yet. It asks the server every time it opens, even with nothing chosen, so a server that is down is no longer reported as up to date. Requires a Q2 Muse with the firmware's `status` word; older firmware keeps the rows.
 
 - Sync Offline from the Q2's Library: hold **Play/Pause** on a server song, album, artist or playlist, or open Now Playing's ⋯, and choose **Sync Offline** (or **Stop Syncing Offline**); the app chooses it for the next Sync and the Q2 says so. Requires a Q2 Muse with the Sync Offline row (q2app's `offline=1`).

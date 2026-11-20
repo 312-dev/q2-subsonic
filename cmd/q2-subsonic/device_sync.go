@@ -775,6 +775,19 @@ func (d *daemon) syncDone(p plan.Plan) {
 	d.lastReq = time.Now() // the summary and Failed Songs stay as long as after a press (I15)
 	d.st.pending = true    // Storage's sizes (storage.go)
 	d.mu.Unlock()
+	snap := d.runner.Snapshot() // what the run did, for Diagnostics
+	var b int64
+	for _, w := range p.Add {
+		b += w.Bytes
+	}
+	ev := event{What: "Synced " + plural(snap.Done, "song"), Op: "sync"}
+	if b > 0 {
+		ev.Why = size(b)
+	}
+	if snap.Failed > 0 {
+		ev.Why, ev.Problem = strings.TrimPrefix(ev.Why+" · "+plural(snap.Failed, "song")+" failed", " · "), true
+	}
+	d.diagAdd(ev)
 	if err := library.WriteOwned(d.card, d.syncedPath(), []byte(time.Now().Format(time.RFC3339))); err != nil {
 		d.log.Printf("sync: last synced: %v", err)
 	}

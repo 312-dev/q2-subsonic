@@ -440,38 +440,32 @@ func TestAvailFollowsCache(t *testing.T) {
 	}
 }
 
-// A catalogue queue drops the songs not on the card when the server is lost, so the firmware
-// plays on past them; the card's files and the cache's copies stay.
-func TestCatQueueDropsUncachedWhenLost(t *testing.T) {
-	e := newEnv(t, fw.Caps{Playlist: true})
-	e.s.backoff = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
-	var pinged atomic.Int32
-	e.s.pinged = func(error) { pinged.Add(1) }
-	lost := &subsonic.APIError{Op: "stream", Msg: "connection refused"}
-	e.src.err = errFor(lost, "s1")
-	e.src.ping = func() error { return lost }
-	own := filepath.Join(e.root, "Music", "own.flac")
-	cached := filepath.Join(e.root, ".subsonic", "stream", "a", "original", "0", "t3 [s3].flac")
-	for _, p := range []string{own, cached} {
-		os.MkdirAll(filepath.Dir(p), 0o755)
-		os.WriteFile(p, []byte("x"), 0o644)
-	}
-	sg := songs(5, "flac")
-	e.s.startCat(sg, []string{"", "", own, "", ""}, 0, &catPlay{seq: 77, local: map[string]string{"s3": cached}})
-	until(t, "the queue dropped what isn't on the card", func() bool {
+// A catalogue queue whose server is lost, or answers through a proxy for one that is down (502),
+// waits at the song it can't fetch, its error set for Now Playing's reason and Retry or Skip; it
+// drops nothing, so nothing is skipped without a word (the user's ruling, 2026-11-19).
+func TestCatQueueWaitsWhenTheServerIsAway(t *testing.T) {
+	for _, away := range []*subsonic.APIError{{Op: "stream", Msg: "connection refused"}, {Op: "stream", HTTP: 502}} {
+		e := newEnv(t, fw.Caps{Playlist: true})
+		e.s.backoff = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+		var pinged atomic.Int32
+		e.s.pinged = func(error) { pinged.Add(1) }
+		err := error(away)
+		if away.HTTP != 0 {
+			err = fmt.Errorf("%w: %w", away, subsonic.ErrUnreachable)
+		}
+		e.src.err = errFor(err, "s1")
+		e.src.ping = func() error { return err }
+		sg := songs(3, "flac")
+		e.s.startCat(sg, []string{"", "", ""}, 0, &catPlay{seq: 77, local: map[string]string{}})
+		until(t, "the song waited at", func() bool { return e.s.Err() != nil })
 		_, body := e.queue(t)
-		return !strings.Contains(body, "[s1]")
-	})
-	_, body := e.queue(t)
-	want := strings.Join([]string{e.stream(0, "flac"), own, cached}, "\n")
-	if !strings.Contains(body, want) || strings.Contains(body, "[s4]") {
-		t.Fatalf("queue %q", body)
-	}
-	if b, _ := os.ReadFile(e.play); !strings.HasPrefix(string(b), "77 ") {
-		t.Fatalf(".play %q", b)
-	}
-	if pinged.Load() == 0 {
-		t.Fatal("the ping wasn't told")
+		if !strings.Contains(body, "[s1]") || !strings.Contains(body, "[s2]") {
+			t.Fatalf("%v: the queue dropped songs: %q", away, body)
+		}
+		if pinged.Load() == 0 {
+			t.Fatal("the ping wasn't told")
+		}
+		e.s.stop()
 	}
 }
 

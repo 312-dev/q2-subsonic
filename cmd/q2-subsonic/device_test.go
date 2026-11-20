@@ -786,12 +786,29 @@ func TestDetailsRow(t *testing.T) {
 	if r.Rows[0].Title != "Data not found" {
 		t.Errorf("message row %q", r.Rows[0].Title)
 	}
-	got := strings.Join(titles(d.do(det.URI, det.Context)), "|")
-	for _, w := range []string{"Op: getAlbum", "HTTP: 200", "Code: 70", "Time: "} {
+	// in plain words (the user's, 2026-11-19): no "Op: getAlbum", "HTTP: 200" or "Code: 70"
+	got := strings.Join(pairs(d.do(det.URI, det.Context)), "|")
+	for _, w := range []string{"What=Reading an album failed", "Why=Not on the server", "When=today at ", "The server no longer has it."} {
 		if !strings.Contains(got, w) {
 			t.Errorf("details %q lack %q", got, w)
 		}
 	}
+	if strings.Contains(got, "Op: ") || strings.Contains(got, "HTTP") {
+		t.Errorf("details %q show codes", got)
+	}
+}
+
+// pairs is a reply's rows as "title=subtitle", or the title alone.
+func pairs(r q2spot.Reply) []string {
+	var out []string
+	for _, row := range r.Rows {
+		if row.Subtitle != "" {
+			out = append(out, row.Title+"="+row.Subtitle)
+		} else {
+			out = append(out, row.Title)
+		}
+	}
+	return out
 }
 
 func TestReplyWithin8s(t *testing.T) {
@@ -1306,8 +1323,8 @@ func TestLibraryRowShowsNameTooLong(t *testing.T) {
 	if !ok {
 		t.Fatalf("no Details: %q", titles(r))
 	}
-	if _, ok := find(d.do("details", det.Context), "Error: "+msg); !ok {
-		t.Errorf("details %q", titles(d.do("details", det.Context)))
+	if got := strings.Join(pairs(d.do("details", det.Context)), "|"); !strings.Contains(got, "Error="+msg) {
+		t.Errorf("details %q", got)
 	}
 }
 
@@ -1651,26 +1668,28 @@ func TestSigninFailureShownOnRoot(t *testing.T) {
 	}
 }
 
-// A stream that gave up shows below the root's fixed rows, so the row under the cursor stays
-// what it was, with Details (M33).
-func TestRootStreamErrorLast(t *testing.T) {
+// A stream that gave up is in Settings > Diagnostics, not loose on the first page (the user's,
+// 2026-11-19), its row opening Details in plain words.
+func TestStreamErrorInDiagnostics(t *testing.T) {
 	d := newTestDaemon(t, &nav{albums: 1, songsPer: 2, mediaErr: 70}, "", true)
 	d.stream.backoff = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
 	d.do("play", "album:al0 0")
 	var r q2spot.Reply
-	eventually(t, "the stream error", func() bool { r = d.do("menu"); _, ok := find(r, "Couldn't stream Song 0"); return ok })
-	if r.Rows[0].Title != "Downloads" {
-		t.Fatalf("first row %q", titles(r))
+	eventually(t, "the stream error", func() bool { r = d.do("diagnostics"); _, ok := find(r, "Couldn't stream Song 0"); return ok })
+	if got := titles(d.do("menu")); strings.Join(got, "|") != "Downloads|Sync|Settings" {
+		t.Fatalf("first page %q", got)
 	}
-	det := r.Rows[len(r.Rows)-1]
-	if r.Rows[len(r.Rows)-2].Title != "Couldn't stream Song 0" || det.Title != "Details" {
-		t.Fatalf("rows %q", titles(r))
+	if sub := r.Rows[0].Subtitle; !strings.HasPrefix(sub, "Not on the server · ") {
+		t.Fatalf("row %+v", r.Rows[0])
 	}
-	got := strings.Join(titles(d.do(det.URI, det.Context)), "|")
-	for _, w := range []string{"Op: stream", "Code: 70", "Song: al0.0"} {
+	got := strings.Join(pairs(d.do(r.Rows[0].URI, r.Rows[0].Context)), "|")
+	for _, w := range []string{"What=Couldn't stream Song 0", "While=Streaming a song", "Why=Not on the server", "Song=Song 0", "Tries=3"} {
 		if !strings.Contains(got, w) {
 			t.Errorf("details %q lack %q", got, w)
 		}
+	}
+	if s, ok := find(d.settingsOp("settings"), "Diagnostics"); !ok || !strings.HasPrefix(s.Subtitle, "Not on the server · ") {
+		t.Errorf("Settings' Diagnostics %+v", s)
 	}
 }
 
@@ -1711,17 +1730,12 @@ func TestStreamFolderKeptAtStartWhilePlaying(t *testing.T) {
 	}
 }
 
-// In a playlist a song the server lacks (70, not found) is skipped: the root says so, with Details.
-func TestRootStreamSkipped(t *testing.T) {
+// In a playlist a song the server lacks (70, not found) is skipped: Diagnostics says so.
+func TestStreamSkippedInDiagnostics(t *testing.T) {
 	d := newTestDaemon(t, &nav{albums: 1, songsPer: 1, mediaErr: 70}, "playlist", true)
 	d.stream.gap = 0
 	d.do("play", "album:al0 0")
-	var r q2spot.Reply
-	eventually(t, "the skip", func() bool { r = d.do("menu"); _, ok := find(r, "Skipped Song 0: Song not found"); return ok })
-	det := r.Rows[len(r.Rows)-1]
-	if got := strings.Join(titles(d.do(det.URI, det.Context)), "|"); !strings.Contains(got, "Code: 70") {
-		t.Fatalf("details %q", got)
-	}
+	eventually(t, "the skip", func() bool { _, ok := find(d.do("diagnostics"), "Skipped Song 0"); return ok })
 }
 
 // A stream holds the Q2 awake only while it fetches: with the songs around the one playing on the
@@ -2299,8 +2313,14 @@ func TestStoppedDetailsTime(t *testing.T) {
 	if unix, _ := strconv.ParseInt(f[3], 10, 64); unix >= time.Now().Unix() {
 		t.Errorf("Details time %d is when they were opened", unix)
 	}
-	if got := strings.Join(titles(d.do(det.URI, det.Context)), "|"); !strings.Contains(got, "Error: ") {
+	if got := strings.Join(pairs(d.do(det.URI, det.Context)), "|"); !strings.Contains(got, "Error=") {
 		t.Errorf("no error in %q", got)
+	}
+	if _, ok := find(d.do("diagnostics"), "Sync stopped"); !ok {
+		d.tick()
+		if _, ok := find(d.do("diagnostics"), "Sync stopped"); !ok {
+			t.Errorf("Diagnostics %q", titles(d.do("diagnostics")))
+		}
 	}
 }
 

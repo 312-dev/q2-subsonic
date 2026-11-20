@@ -79,8 +79,8 @@ type streamer struct {
 	// or loses, and pinged of each ping that tells a lost server from one bad song, and its answer.
 	avail  func(path string, kept bool)
 	pinged func(err error)
-	// gaveUp, optional, is told of each song given up (giveUp) with its last try's error.
-	gaveUp func(err error)
+	// gaveUp, optional, is told of each song given up (giveUp).
+	gaveUp func(e *streamErr)
 
 	errMu sync.Mutex
 	err   *streamErr
@@ -140,7 +140,7 @@ func (s *streamer) Err() *streamErr {
 func (s *streamer) giveUp(e *streamErr) {
 	s.setErr(e)
 	if s.gaveUp != nil {
-		s.gaveUp(e.err)
+		s.gaveUp(e)
 	}
 }
 
@@ -318,9 +318,9 @@ type catPlay struct {
 }
 
 // startCat is start for a catalogue queue: paths[i], when not "", is a card file that plays as it
-// is (the user's own, or a synced song) in place of songs[i]. While the server is lost, the songs
-// not on the card are taken out of its queue file (dropUncached), so the firmware plays on past
-// them rather than wait.
+// is (the user's own, or a synced song) in place of songs[i]. While the server is lost, the queue
+// waits at the song it can't fetch, as any queue does, and Now Playing says why with Retry and
+// Skip (the user's ruling, 2026-11-19: no silent skip).
 func (s *streamer) startCat(songs []subsonic.Song, paths []string, from int, c *catPlay) {
 	s.startRun(songs, paths, from, c, nil)
 }
@@ -510,8 +510,13 @@ func (r *streamRun) serverLost() bool {
 	if r.s.pinged != nil && r.ctx.Err() == nil {
 		r.s.pinged(err)
 	}
-	return lost(err)
+	return serverAway(err)
 }
+
+// serverAway is a lost server, or a proxy answering for one that isn't there (502, 503, 504: reachCode):
+// waited for, never skipped past (the user's ruling, 2026-11-19: no silent skip; Now Playing says
+// why and offers Retry and Skip).
+func serverAway(err error) bool { return lost(err) || reachCode(err) != "" }
 
 // failed counts a failed try of song i and reports whether the run goes on, and whether the song
 // was skipped. A song is tried once a backoff entry (in a playlist, once when it is gone). Then,
@@ -534,11 +539,8 @@ func (r *streamRun) failed(i int, err error) (goOn, skipped bool) {
 	// play on, so the song is tried on at the backoff's last pace until the server answers. It
 	// ends only when no song has started for the idle time: the list was left. A server that
 	// answers the ping is not lost: the failure is the song's own, for the rules below.
-	if lost(err) && time.Now().Before(r.quietBy) {
+	if serverAway(err) && time.Now().Before(r.quietBy) {
 		if r.serverLost() {
-			if r.cat {
-				return r.dropUncached(i, e)
-			}
 			j.away, j.next = true, time.Now().Add(s.backoff[len(s.backoff)-1])
 			s.setErr(e)
 			return true, false
@@ -572,33 +574,6 @@ func (r *streamRun) failed(i int, err error) (goOn, skipped bool) {
 	s.logf("stream: skipped %s (%q): %v", sg.ID, sg.Title, err)
 	r.last = min(r.last, len(r.jobs)-1)
 	return r.from < len(r.jobs), true // nothing left to play ends the run
-}
-
-// dropUncached takes every song from i on that is not on the card out of a catalogue queue, the
-// server being lost: the firmware has queued the lines before i and skips nothing itself, so it
-// would wait at the first missing one. It reports as failed does; nothing left ends the run.
-func (r *streamRun) dropUncached(i int, e *streamErr) (goOn, skipped bool) {
-	select {
-	case <-r.ctx.Done():
-		return false, false
-	case <-time.After(r.s.gap - time.Since(r.wrote)):
-	}
-	n := len(r.jobs)
-	for k := len(r.jobs) - 1; k >= i; k-- {
-		if r.jobs[k].fetch && !r.s.whole(r.jobs[k].path) {
-			r.jobs, r.songs = slices.Delete(r.jobs, k, k+1), slices.Delete(r.songs, k, k+1)
-		}
-	}
-	if err := r.writeQueue(); err != nil {
-		r.s.logf("stream: queue: %v", err)
-		r.s.giveUp(e)
-		return false, false
-	}
-	r.s.logf("stream: server lost, %d songs not on the card taken out of the queue", n-len(r.jobs))
-	e.skipped = true
-	r.s.giveUp(e)
-	r.last = min(r.last, len(r.jobs)-1)
-	return r.from < len(r.jobs), true
 }
 
 func (r *streamRun) announce(path string) {

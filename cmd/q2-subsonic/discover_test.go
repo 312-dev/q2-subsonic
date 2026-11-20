@@ -157,16 +157,17 @@ func TestArtistPlay(t *testing.T) {
 	d.waitQueued(t, 6)
 }
 
-// An album that fails while an artist's songs are fetched shows as the stream's error on the root.
+// An album that fails while an artist's songs are fetched is in Diagnostics, as a stream's error.
 func TestArtistPlayFails(t *testing.T) {
 	d := newTestDaemon(t, &nav{albums: 2, songsPer: 3, failID: "al1", failCode: 50}, "", true)
 	d.do("play", "artist:ar1 0")
 	d.bg.Wait()
-	r := d.do("menu")
-	if _, ok := find(r, "Couldn't stream Artist"); !ok || r.Rows[len(r.Rows)-1].Title != "Details" {
+	r := d.do("diagnostics")
+	row, ok := find(r, "Couldn't stream Artist")
+	if !ok {
 		t.Fatalf("rows %q", titles(r))
 	}
-	if got := strings.Join(titles(d.do("details", r.Rows[len(r.Rows)-1].Context)), "|"); !strings.Contains(got, "Op: getAlbum") || !strings.Contains(got, "Code: 50") {
+	if got := strings.Join(pairs(d.do(row.URI, row.Context)), "|"); !strings.Contains(got, "What=Couldn't stream Artist") {
 		t.Errorf("details %q", got)
 	}
 }

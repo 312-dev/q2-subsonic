@@ -27,6 +27,8 @@ type reach struct {
 	down string // the code while out of reach, "" while reachable or not yet known
 	keys *stateKeys
 	now  func() time.Time
+	// wentDown, optional, is told of the error that took the server out of reach (Diagnostics)
+	wentDown func(err error)
 }
 
 // reachCode is the code err gives the server's reach: "" for an answer from the server itself (a
@@ -55,14 +57,15 @@ func (r *reach) seen(err error) {
 		}
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if code == r.down {
+		r.mu.Unlock()
 		return
 	}
 	went := r.down == ""
 	r.down = code
 	if code == "" {
 		r.keys.setReach("", "")
+		r.mu.Unlock()
 		return
 	}
 	toast := ""
@@ -70,6 +73,10 @@ func (r *reach) seen(err error) {
 		toast = fmt.Sprintf("%d %s", r.now().Unix(), code)
 	}
 	r.keys.setReach("down "+code, toast)
+	r.mu.Unlock()
+	if went && r.wentDown != nil {
+		r.wentDown(err)
+	}
 }
 
 // gaveUp is a streamed song given up (skipped, or the queue stopped at it): a toast with why, when

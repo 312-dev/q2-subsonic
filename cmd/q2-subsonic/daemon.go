@@ -376,6 +376,8 @@ type daemon struct {
 	resume             resumeState   // the firmware's request to resume a restored stream (resume.go)
 	reach              *reach        // whether the server can be reached, for the status row (reach.go)
 	off                offlineState  // the firmware's Sync Offline requests (offline.go)
+	diag               diagState     // Settings > Diagnostics' events (diagnostics.go)
+	diagErrAt          time.Time     // the sync stop Diagnostics recorded last
 
 	bg sync.WaitGroup // the work replies leave running (ping, preview, play, sign-out's stops); tests wait for it
 }
@@ -401,6 +403,7 @@ func newDaemon(dir, card, tmp string) *daemon {
 		free: freeBytes, answerIn: answerIn, signinPort: signinPort, browseTTL: browseTTL,
 		lastReq: time.Now(), resolved: map[string][]subsonic.Song{}, artistAlbums: map[string][]subsonic.Album{}}
 	d.reach = &reach{keys: d.state, now: time.Now}
+	d.reach.wentDown = func(err error) { d.diagAdd(failure("Server out of reach", "", err)) }
 	d.signin = &signin{dir: dir, state: d.state, addrs: func() []net.Addr {
 		if d.addrs != nil {
 			return d.addrs()
@@ -458,7 +461,16 @@ func newDaemon(dir, card, tmp string) *daemon {
 		keep = acctDir(c.Server, c.User)
 	}
 	d.stream.avail, d.stream.pinged = d.slAvail, d.slPinged // before the sweep, whose drops tell avail
-	d.stream.gaveUp = d.reach.gaveUp
+	d.stream.gaveUp = func(e *streamErr) {
+		d.reach.gaveUp(e.err)
+		what := "Couldn't stream " + e.title
+		if e.skipped {
+			what = "Skipped " + e.title
+		}
+		ev := failure(what, "stream", e.err)
+		ev.Song, ev.Tries = e.title, len(d.stream.backoff)
+		d.diagAdd(ev)
+	}
 	d.slInit()
 	d.radioInit()
 	d.lyricsInit()
@@ -737,6 +749,12 @@ func (d *daemon) tick() {
 	d.coverTick()
 	d.resumeTick()
 	d.offlineTick()
+	if snap := d.runner.Snapshot(); snap.State == "error" && !snap.ErrAt.IsZero() && !snap.ErrAt.Equal(d.diagErrAt) {
+		d.diagErrAt = snap.ErrAt // tick runs on one goroutine: no lock
+		ev := failure("Sync stopped", "sync", snap.Err)
+		ev.At = snap.ErrAt
+		d.diagAdd(ev)
+	}
 	if d.caps.Library {
 		d.mu.Lock()
 		d.libPoll()

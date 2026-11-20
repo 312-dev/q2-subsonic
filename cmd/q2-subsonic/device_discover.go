@@ -197,7 +197,7 @@ func (d *daemon) playArtist(ctx context.Context, cl *subsonic.Client, id string,
 		case !d.latestPlay(seq):
 		case err != nil: // shown on the root, as a stream that gave up is
 			d.log.Printf("error: %v", err)
-			d.stream.setErr(&streamErr{title: it.name, at: time.Now(), err: err})
+			d.stream.giveUp(&streamErr{title: it.name, at: time.Now(), err: err}) // in Diagnostics too
 		default:
 			d.stream.start(songs, 0)
 		}
