@@ -152,26 +152,38 @@ func (s *streamer) dropGrowing() {
 	library.Remove(s.root, s.journal())
 }
 
-// plan is the songs to have, in order: the one playing, then n more (Off being none) as the
-// firmware's .ahead for this queue names them: the songs its queue holds after the one playing, in
-// its play order. Its queue is the m3u's lines up to the first one not there yet, so when it
-// names fewer, the rest are the list's songs after the one playing not yet whole, in list order:
-// the ones it queues next. Without an .ahead, the list's next streamWindow.
+// plan is the songs to have, in order: the one playing, then the songs the firmware's .ahead for
+// this queue names (the songs its queue holds after the one playing, in its play order), then the
+// list's songs after the one playing not yet whole, in list order: the ones its queue takes next,
+// as its queue is the m3u's lines up to the first one not there yet. n (Off being 0) is how many of
+// them it holds, but a song .ahead names from before the one playing that is already whole takes
+// none: under Repeat All, .ahead names the next pass once the songs queued have all played, and the
+// list's next must not wait behind it (the drive of 2026-11-22: a radio stopped at its fourth song).
+// Without an .ahead, the list's next streamWindow.
 func (r *streamRun) plan(cur int) []int {
 	out := []int{cur}
 	if r.s.caps.Ahead && r.s.aheadFile != "" {
 		if a, ok := readAhead(r.s.aheadFile); ok && a.seq == r.playSeq {
+			slots := 0 // the plan's songs after cur that take one of n's
+			add := func(i int) {
+				out = append(out, i)
+				if i > cur || !r.s.whole(r.jobs[i].path) { // a whole song behind cur: Repeat All's next pass
+					slots++
+				}
+			}
 			for _, p := range a.paths {
-				if len(out) > a.n {
+				if slots >= a.n {
 					break
 				}
 				if i := r.find(p, cur); i >= 0 && !slices.Contains(out, i) {
-					out = append(out, i)
+					add(i)
 				}
 			}
-			for i := cur + 1; i < len(r.jobs) && len(out) <= a.n; i++ {
-				if j := r.jobs[i]; j.fetch && !r.s.whole(j.path) && !slices.Contains(out, i) {
-					out = append(out, i)
+			// then the list's: one still to fetch, or one this run fetched that .ahead doesn't name yet
+			// (its queue not yet holding it), which keeps its slot
+			for i := cur + 1; i < len(r.jobs) && slots < a.n; i++ {
+				if j := r.jobs[i]; j.fetch && (j.landed || !r.s.whole(j.path)) && !slices.Contains(out, i) {
+					add(i)
 				}
 			}
 			return out

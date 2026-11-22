@@ -640,15 +640,17 @@ func (r *streamRun) run() {
 		// Whether .playing names cur for this list: cur is also where it starts, before the
 		// firmware has played anything of it.
 		named := now == r.jobs[cur].path && !(now == r.stale && at.Equal(r.staleAt))
+		plan := r.plan(cur)
+		// The songs well behind the one playing go, but not one the plan has to come (Repeat All's
+		// next pass, named in .ahead): deleted, it was fetched again at once, and deleted again.
 		for i := r.from; i < cur-streamWindow; i++ {
-			if r.jobs[i].fetch && !r.jobs[i].cached {
+			if r.jobs[i].fetch && !r.jobs[i].cached && !slices.Contains(plan, i) {
 				library.Remove(r.s.root, r.jobs[i].path)
 			}
 		}
 		if lo := max(r.from, cur-streamWindow); lo != r.keptLo || len(r.jobs) != r.keptN { // the song changed, or one was skipped
 			r.protect(lo, len(r.jobs))
 		}
-		plan := r.plan(cur)
 		want := -1 // the first song of the plan still to fetch
 		for _, i := range plan {
 			if j := r.jobs[i]; j.fetch && !r.s.whole(j.path) {
