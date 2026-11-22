@@ -170,11 +170,19 @@ func newTransport(roots *x509.CertPool, timeout time.Duration) *http.Transport {
 	if t := transports[timeout]; t != nil && roots == pool {
 		return t
 	}
+	// HTTP/2 when the server offers it (a song's download, its playing-now report, a cover and the
+	// ping share one connection, and a download cancelled at a skip resets its stream, not the
+	// connection), and TLS sessions resumed: each full handshake is a chain check in pure Go on
+	// the Q2's CPU. An idle connection goes after 90 s rather than being held and probed.
 	t := &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   timeout,
 		ResponseHeaderTimeout: timeout,
-		TLSClientConfig:       &tls.Config{RootCAs: roots, Time: Now, MinVersion: tls.VersionTLS12},
+		ForceAttemptHTTP2:     true,
+		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConnsPerHost:   4,
+		TLSClientConfig: &tls.Config{RootCAs: roots, Time: Now, MinVersion: tls.VersionTLS12,
+			ClientSessionCache: tls.NewLRUClientSessionCache(16)},
 	}
 	if roots == pool {
 		transports[timeout] = t
