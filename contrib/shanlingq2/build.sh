@@ -15,16 +15,22 @@ OUT=$(cd "$OUT" && pwd)
 VERSION=$(sed -n 's/^const version = "q2-\(v[0-9.]*\)"$/\1/p' "$ROOT/cmd/q2-$APP/main.go")
 [ -n "$VERSION" ] || { echo "build.sh: no version constant in cmd/q2-$APP/main.go" >&2; exit 1; }
 SHA=$(git -C "$ROOT" rev-parse --short=7 HEAD 2>/dev/null || echo local)
+# a tree with changes is marked: the zip's name, the app's build and its version file say -dirty
+if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]; then
+    SHA="$SHA-dirty"
+    echo "build.sh: the tree has changes; this build is marked $SHA" >&2
+fi
 
 R="$OUT/.$APP"
 rm -rf "$R"
 mkdir -p "$R"
 cd "$ROOT"
 CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat \
-    go build -trimpath -ldflags='-s -w -buildid=' -o "$R/q2-$APP" "./cmd/q2-$APP"
+    go build -trimpath -ldflags="-s -w -buildid= -X main.build=$SHA" -o "$R/q2-$APP" "./cmd/q2-$APP"
 cp "$HERE/launcher.sh" "$R/run"
 cp "$HERE/q2app" "$HERE/icon.png" "$HERE/icon-40.png" "$R/"
+echo "q2-$VERSION+$SHA" > "$R/version"
 chmod 755 "$R/q2-$APP" "$R/run"
-chmod 644 "$R/q2app" "$R/icon.png" "$R/icon-40.png"
+chmod 644 "$R/q2app" "$R/icon.png" "$R/icon-40.png" "$R/version"
 rm -f "$OUT"/q2-$APP-*.zip
 python3 -I "$HERE/package.py" "$R" "$OUT/q2-$APP-$VERSION-$SHA.zip"

@@ -7,6 +7,7 @@ import (
 	"net/http/httptrace"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -17,7 +18,7 @@ import (
 // at the next of the app's 1 s ticks (the drive of 2026-11-22: about 4 s from the press to the
 // server's first byte). It blocks in read, so it adds no wakeup while nothing is written; without
 // inotify it returns and the tick alone reads the files, as before.
-func watchNames(dir string, names []string, kick chan<- struct{}) {
+func watchNames(dir string, names []string, kick chan<- struct{}, on *atomic.Bool) {
 	fd, err := syscall.InotifyInit1(syscall.IN_CLOEXEC)
 	if err != nil {
 		return
@@ -25,6 +26,10 @@ func watchNames(dir string, names []string, kick chan<- struct{}) {
 	defer syscall.Close(fd)
 	if _, err := syscall.InotifyAddWatch(fd, dir, syscall.IN_CLOSE_WRITE|syscall.IN_MOVED_TO); err != nil {
 		return
+	}
+	if on != nil {
+		on.Store(true) // kicks will come: a reader may wait longer between its own looks
+		defer on.Store(false)
 	}
 	buf := make([]byte, 4096)
 	for {
@@ -111,4 +116,15 @@ func (g *getTrace) line(headers time.Time) string {
 	}
 	return fmt.Sprintf("request: connection reused %v, dns %d ms, connect %d ms, tls %d ms, headers %d ms after the request",
 		g.reused, ms(g.dns0, g.dns1), ms(g.tcp0, g.tcp1), ms(g.tls0, g.tls1), ms(g.wrote, headers))
+}
+
+// watched are the firmware's files in tmp whose change the stream's run loop answers at once.
+func (s *streamer) watched() []string {
+	var out []string
+	for _, p := range []string{s.playingFile, s.aheadFile, s.retryFile} {
+		if p != "" {
+			out = append(out, filepath.Base(p))
+		}
+	}
+	return out
 }

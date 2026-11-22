@@ -97,7 +97,7 @@ func (s settings) stream() string {
 	return s.StreamQuality
 }
 
-// stateKeys is the state file: sign-in's QR keys, hold=1, version, the Server Library's
+// stateKeys is the state file: sign-in's QR keys, hold=1, version and build, the Server Library's
 // server=up or down, what the app syncs (sync=, syncState), the server's reach (reach=, srverr=,
 // reach.go) and the answers to the firmware's requests (radioack= and the other *ack= keys,
 // offlineack= among them), merged so no writer drops another's keys.
@@ -214,6 +214,9 @@ func (s *stateKeys) remove() {
 
 func (s *stateKeys) flush() error {
 	m := map[string]string{"version": version}
+	if build != "" {
+		m["build"] = build
+	}
 	for k, v := range s.sign {
 		m[k] = v
 	}
@@ -391,7 +394,7 @@ func (d *daemon) spawn(f func()) {
 func newDaemon(dir, card, tmp string) *daemon {
 	os.MkdirAll(dir, 0o755)
 	lg := applog.Open(filepath.Join(dir, "log.txt"), 1<<20)
-	if err := lg.Scrub(); err != nil { // an older build's lines kept the user name of each request
+	if err := lg.ScrubOnce(); err != nil { // an older build's lines kept the user name of each request
 		lg.Printf("log: scrub: %v", err)
 	}
 	d := &daemon{dir: dir, card: card, tmp: tmp, log: lg,
@@ -826,7 +829,8 @@ func (d *daemon) close(sock string) {
 func (d *daemon) serve(sock string) error {
 	kick := make(chan struct{}, 1)
 	dir, names := d.pressNames()
-	go watchNames(dir, names, kick)
+	go watchNames(dir, names, kick, nil)
+	go watchNames(dir, d.stream.watched(), d.stream.kick, &d.stream.kicked)
 	go ticks(time.Second, kick, func() {
 		d.tick()
 		if d.idle(time.Now()) {

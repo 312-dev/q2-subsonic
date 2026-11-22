@@ -32,9 +32,11 @@ import (
 // and it goes on where it was when the switch is turned on again.
 
 const (
-	appID    = "subsonic"  // the app's folder is .<appID>, its /tmp files q2-<appID>.*
-	slEvery  = time.Minute // the server is pinged this often while the Server Library runs (slActive)
-	slPingIn = 10 * time.Second
+	appID         = "subsonic"       // the app's folder is .<appID>, its /tmp files q2-<appID>.*
+	slEvery       = time.Minute      // the server is pinged this often while the Server Library runs (slActive)
+	slUnused      = 5 * time.Minute  // no request and nothing streaming this long: the ping is every slUnusedEvery
+	slUnusedEvery = 10 * time.Minute // a ping is a request and a line in log.txt on the card
+	slPingIn      = 10 * time.Second
 )
 
 // batteryStatus is where the Q2's charger says whether it charges (the AXP2101's battery supply).
@@ -50,6 +52,7 @@ type serverLib struct {
 	mu       sync.Mutex
 	up       int8      // the server answered (1), didn't (-1), not asked yet (0)
 	nextPing time.Time // when the server is asked next
+	quiet    bool      // the ping went at slUnusedEvery: nothing used the app for slUnused
 	due      bool      // the server's hint changed: a walk waits for the Q2 to be idle or charging
 	resync   bool      // Resync Library was pressed: the next check walks whatever the hint says
 	rewrite  bool      // Streaming Songs is on again: the next check writes the catalogue first
@@ -133,12 +136,23 @@ func (d *daemon) slTick() {
 		return
 	}
 	d.slCatplay()
+	d.mu.Lock()
+	last := d.lastReq
+	d.mu.Unlock()
+	quiet := time.Since(last) >= slUnused && !d.stream.active()
 	d.sl.mu.Lock()
+	if d.sl.quiet && !quiet { // the Q2 used again (a request, a stream): the server asked at once
+		d.sl.nextPing = time.Time{}
+	}
 	if time.Now().Before(d.sl.nextPing) || d.sl.busy.Load() {
 		d.sl.mu.Unlock()
 		return
 	}
-	d.sl.nextPing = time.Now().Add(slEvery)
+	every := slEvery
+	if d.sl.quiet = quiet; quiet {
+		every = slUnusedEvery
+	}
+	d.sl.nextPing = time.Now().Add(every)
 	d.sl.mu.Unlock()
 	if d.sl.busy.CompareAndSwap(false, true) {
 		d.spawn(func() { defer d.sl.busy.Store(false); d.slCheck() })
@@ -192,7 +206,6 @@ func (d *daemon) slCheck() {
 
 const (
 	slCoverPass = 30 * time.Second // a round of covers at most: the next check, a rewrite, wait no longer
-	slCoverConc = 2                // covers asked for at once
 	slCoverIn   = 10 * time.Second // one cover's request
 )
 
@@ -208,8 +221,8 @@ func (d *daemon) bigCovers() catalogue.Covers {
 
 // slCovers is a round of the catalogue's album covers (catalogue.Covers): while the app's network
 // is quiet (slQuiet) or the Q2 charges, and the server answers, the albums the folder lacks are
-// asked for, slCoverConc at a time and for slCoverPass at most, through the network slot a sync or
-// a stream takes first. What was saved stays, so the next round, a minute on, goes on from there.
+// asked for, one at a time (each request holds the one network slot, fetchCover) and for
+// slCoverPass at most, through the network slot a sync or a stream takes first. What was saved stays, so the next round, a minute on, goes on from there.
 // A cover the server says it hasn't is noted and not asked again; a lost server ends the round,
 // and so does a sync starting or a song of the stream to fetch. Once the 160 px set has nothing
 // left to fetch, the rounds fetch the car's 512 px set (bigCovers) the same way. Once neither has
@@ -264,7 +277,7 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 	var lost error
 	ids := make(chan string)
 	var wg sync.WaitGroup
-	for range slCoverConc {
+	for range 1 { // one: a cover's request holds the network slot (fetchCover)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

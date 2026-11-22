@@ -15,6 +15,12 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ### Changed
 
+- A long list such as a Shuffle of the whole library starts sooner: its start read the Streaming Quality setting from the card once for every song (9,199 times), and now reads it once. The app also notices a press at once rather than at its next second, writes the download's progress at once and when the song can start, and keeps one connection to the server for a song's requests (HTTP/2 where the server offers it, TLS sessions resumed), so a skip no longer costs a fresh handshake.
+- Songs past about the first 2,300 of a very long list now play: the Q2 reads the list's queue file only so far, and the app writes it a thousand songs ahead of the one playing, growing it as the list plays.
+- A song whose download is cut by a dropped connection goes on from where it stopped, rather than ending there and being downloaded again from the start.
+- The progress no longer reads "stalled" while the server has yet to answer.
+- The app pings the server every 10 minutes instead of every minute once nothing has used it for 5, cleans old log lines once rather than at every start, and looks at a paused list less often.
+- The app's version names the build it came from (Settings shows "Version 1.0+<commit>").
 - The log says how each streamed song's download went: how long the server took to answer and to send its first byte, each wait of more than 0.7 s for bytes (while it lasts, with the bytes it stopped at, and when bytes come again), a write of the progress file that took over 0.3 s, and at the end the bytes, the time, the longest wait, the rate and how long the Stream Cache's trim took before the request.
 - The app no longer counts its folder's size every 10 minutes while it runs (several seconds of the Q2's CPU each time, with thousands of covers): it counts it when it starts, when the Storage page opens, and after it wrote there. With a Q2 Muse that doesn't say when the page opens, the page shows the size counted at the app's start or after its last write.
 - **Settings → Diagnostics** lists what went wrong and the syncs, newest first, kept for a week: a song skipped or that couldn't stream, the server going out of reach, a sync that finished or stopped, each with why and when. A row opens its **Details** in plain words (what, while doing what, why, when, the song, the server, and a sentence on what it means) instead of "Op: stream". The first page no longer shows a loose "Skipped …" row.

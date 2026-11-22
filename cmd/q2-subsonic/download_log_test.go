@@ -153,3 +153,20 @@ func TestADownloadCutMidSongResumesWhereItStopped(t *testing.T) {
 		t.Fatalf("asked from %v; the second try from 10000", froms)
 	}
 }
+
+// While the server has yet to answer, the line is get with nothing come, not stall: a stall is bytes
+// that came and stopped (the firmware says why it waits from the state).
+func TestNoStallBeforeTheFirstByte(t *testing.T) {
+	e := aheadEnv(t, false)
+	e.s.stallAfter, e.s.statusEvery = 20*time.Millisecond, 10*time.Millisecond
+	answer := make(chan struct{})
+	e.src.body = func(string) (io.Reader, int64) { <-answer; return strings.NewReader("123"), 3 }
+	e.s.start(songs(1, "flac"), 0)
+	until(t, "the get line", func() bool { l := e.statusLines(t); return len(l) == 2 && strings.HasPrefix(l[1], "get\t0\t") })
+	time.Sleep(200 * time.Millisecond)
+	l := e.statusLines(t)
+	close(answer)
+	if len(l) != 2 || !strings.HasPrefix(l[1], "get\t0\t") {
+		t.Fatalf("waiting for the server: %q", l)
+	}
+}

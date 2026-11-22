@@ -307,7 +307,9 @@ func (r *streamRun) status(plan []int, want int) {
 			if p.total > 0 {
 				total = p.total
 			}
-			if time.Since(p.movedAt) >= cmpOr(s.stallAfter, stallAfter) {
+			// stall once bytes came and then stopped; before the first, the server is still to
+			// answer, which the line says as get with what has come (it read stall after 2 s)
+			if !p.first.IsZero() && time.Since(p.movedAt) >= cmpOr(s.stallAfter, stallAfter) {
 				state = "stall"
 			}
 		case s.whole(j.path):

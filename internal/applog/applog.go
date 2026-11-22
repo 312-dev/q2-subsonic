@@ -52,6 +52,20 @@ func (l *Log) Scrub() error {
 	return first
 }
 
+// ScrubOnce is Scrub the first time only: a marker beside the log (<path>.scrubbed) says it ran.
+// Printf redacts every line it writes, so only an older build's lines need it, and a start that
+// read and matched 2 MB of log before serving took seconds on the Q2 (66 ms on a desktop).
+func (l *Log) ScrubOnce() error {
+	mark := l.path + ".scrubbed"
+	if _, err := os.Stat(mark); err == nil {
+		return nil
+	}
+	if err := l.Scrub(); err != nil {
+		return err
+	}
+	return os.WriteFile(mark, nil, 0o600)
+}
+
 func scrub(path string) error {
 	b, err := os.ReadFile(path)
 	if os.IsNotExist(err) {

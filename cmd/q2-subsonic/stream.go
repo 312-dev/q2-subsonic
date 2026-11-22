@@ -29,6 +29,9 @@ import (
 // sends no .ahead (Download Ahead, ahead.go).
 const streamWindow = 2
 
+// idleLooks is how many polls the run loop waits between looks while it has nothing to fetch.
+const idleLooks = 5
+
 type streamSource interface {
 	PlayURL(id, quality string) string
 	Get(ctx context.Context, u string, from int64) (*http.Response, error)
@@ -55,6 +58,9 @@ type streamer struct {
 	// have ended, and nothing is left to fetch: the firmware leaves .playing alone once it plays
 	// anything else, so this is also how a stream learns that it was left. Default idleAfter.
 	idle time.Duration
+	// kick wakes the run loop at once: the daemon sends on it when .playing, .ahead or .retry change.
+	kick   chan struct{}
+	kicked atomic.Bool // a watch sends on kick (watchNames): the idle loop may wait idleLooks polls
 	// removeHook, a test's, takes dropBehind's deletes in place of library.Remove.
 	removeHook func(path string)
 	// gap is the least time between two writes of a queue file: the firmware reads it again when
@@ -111,7 +117,7 @@ func newStreamer(root, play, playing string, caps fw.Caps, src streamSource, man
 	return &streamer{root: root, playFile: play, playingFile: playing, caps: caps, src: src, manifest: man, net: net, poll: poll,
 		backoff: []time.Duration{2 * time.Second, 8 * time.Second, 30 * time.Second},
 		gap:     2100 * time.Millisecond, // 2 s and a tick of the kernel's coarse clock
-		plays:   &plays{unit: time.Second}}
+		plays:   &plays{unit: time.Second}, kick: make(chan struct{}, 1)}
 }
 
 // streamErr is a song that failed all its tries: what the root shows, and its Details.
@@ -726,9 +732,17 @@ func (r *streamRun) run() {
 			return
 		}
 		if !fetched {
+			// With nothing to fetch, and the daemon watching .playing, .ahead and .retry
+			// (watchNames: a change wakes the loop at once), it looks again idleLooks polls on: a
+			// paused list ran it once a second for the half hour before it ended.
+			wait := r.s.poll
+			if want < 0 && r.s.kicked.Load() {
+				wait *= idleLooks
+			}
 			select {
 			case <-r.ctx.Done():
-			case <-time.After(r.s.poll):
+			case <-r.s.kick:
+			case <-time.After(wait):
 			}
 		}
 	}

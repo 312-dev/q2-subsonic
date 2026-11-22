@@ -620,7 +620,7 @@ func (d *daemon) settingsOp(op string, _ ...string) q2spot.Reply {
 	rows = append(rows, d.slSettings()...)
 	rows = append(rows, list("diagnostics", "Diagnostics", d.diagLatest(), "")) // what went wrong, and the syncs
 	return q2spot.Reply{Rows: append(rows, list("account", "Account", user, ""),
-		info("Version "+strings.TrimPrefix(version, "q2-v")))}
+		info("Version "+strings.TrimPrefix(versionBuild(), "q2-v")))}
 }
 
 func (d *daemon) settingErr(err error) q2spot.Reply {

@@ -18,6 +18,19 @@ import (
 
 const version = "q2-v1.0"
 
+// build is the commit the app was built from, "-dirty" after it when the tree had changes, set by
+// contrib/shanlingq2/build.sh (-ldflags -X main.build=...); "" for a plain go build.
+var build string
+
+// versionBuild is version with its build: what the log, Settings' Version row and the state file's
+// build= say, so a Q2 tells which app it runs (every zip of a version said the same before).
+func versionBuild() string {
+	if build == "" {
+		return version
+	}
+	return version + "+" + build
+}
+
 func main() {
 	dir := flag.String("dir", "/mnt/mmc/.subsonic", "the add-on's folder on the card")
 	card := flag.String("card", "/mnt/mmc", "the card's root")
@@ -29,9 +42,9 @@ func main() {
 	nice := lowerPriority()
 	q2.SetupLog("q2-subsonic")
 	q2.Card = *card
-	log.Print("start ", version)
+	log.Print("start ", versionBuild())
 	d := newDaemon(*dir, *card, *tmp)
-	d.log.Printf("start %s", version)
+	d.log.Printf("start %s", versionBuild())
 	if nice != nil {
 		d.log.Printf("nice: %v", nice)
 	}
