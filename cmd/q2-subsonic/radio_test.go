@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -202,5 +203,29 @@ func TestRadioSeedStillArrivingIsNotFetchedAgain(t *testing.T) {
 	}
 	if got := n.fetches("al3.2"); got != 1 {
 		t.Fatalf("the seed was fetched %d times, want 1", got)
+	}
+}
+
+// The drive of 2026-11-22: a radio started on a song, stopped from the car, then started on the song again, twice,
+// and each time the firmware toasted "Radio isn't available for this song" (radioack code 2). A server answers the
+// same similar songs for the same seed, and the first radio had queued them all, so every one was "played or queued
+// lately" and the new radio held the seed alone (errNoSimilar). A radio started again plays those songs again.
+func TestRadioStartedAgainOnTheSameSong(t *testing.T) {
+	n := &nav{albums: 4, songsPer: 6} // the same answer every time, as a real server's for one seed
+	d := newTestDaemon(t, n, "playlist radio", true)
+	d.ask("7 start " + d.streamed("al3.2"))
+	eventually(t, "the first radio on", func() bool { return d.stateKey("radioack") == "7 0" })
+	d.ask("8 stop")
+	for seq := 9; seq <= 10; seq++ {
+		d.ask(strconv.Itoa(seq) + " start " + d.streamed("al3.2"))
+		want := strconv.Itoa(seq) + " 0"
+		eventually(t, "radio "+want, func() bool { return strings.HasPrefix(d.stateKey("radioack"), strconv.Itoa(seq)+" ") })
+		if got := d.stateKey("radioack"); got != want {
+			t.Fatalf("started again: radioack=%q, want %q", got, want)
+		}
+		if d.stateKey("radio") != "Song 2" {
+			t.Fatalf("radio=%q", d.stateKey("radio"))
+		}
+		d.ask(strconv.Itoa(seq) + "0 stop")
 	}
 }

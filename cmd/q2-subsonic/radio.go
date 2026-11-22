@@ -150,7 +150,17 @@ func (d *daemon) radioStart(ctx context.Context, cl *subsonic.Client, seed, titl
 		d.radio.heard(first.ID)
 		songs, paths = append(songs, *first), append(paths, path)
 	}
-	songs = append(songs, d.radio.fresh(similar)...)
+	more := d.radio.fresh(similar)
+	if len(more) == 0 && len(similar) > 0 {
+		// every similar song played or queued lately: a radio started again on the same seed (stopped from the
+		// car and started again, 2026-11-22) plays them again, as the firmware's own radio does, rather than none
+		d.radio.recent = d.radio.recent[:0]
+		if first != nil {
+			d.radio.heard(first.ID)
+		}
+		more = d.radio.fresh(similar)
+	}
+	songs = append(songs, more...)
 	d.radio.mu.Unlock()
 	if len(songs) <= 1 && first != nil || len(songs) == 0 {
 		return "", errNoSimilar
