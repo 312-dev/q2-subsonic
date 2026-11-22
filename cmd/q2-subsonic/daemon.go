@@ -824,7 +824,10 @@ func (d *daemon) close(sock string) {
 
 // serve answers Q2SPOT/1 on sock, and exits 0 once idle.
 func (d *daemon) serve(sock string) error {
-	go q2.Every(time.Second, nil, func() {
+	kick := make(chan struct{}, 1)
+	dir, names := d.pressNames()
+	go watchNames(dir, names, kick)
+	go ticks(time.Second, kick, func() {
 		d.tick()
 		if d.idle(time.Now()) {
 			d.log.Printf("idle, exiting")
