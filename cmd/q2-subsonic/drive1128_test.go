@@ -94,8 +94,8 @@ func TestAheadAllWholeFetchesNothing(t *testing.T) {
 // (Repeat All's next pass), which were fetched over and over in a loop.
 func TestAheadCacheOffKeepsTheSongsNamedToCome(t *testing.T) {
 	e, seq, k := fourWhole(t, false)
+	e.ahead(t, seq, 2, k(0), k(1)) // before .playing, as stream_poll writes them (ahead_poll first)
 	os.WriteFile(e.playing, []byte(k(3)+"\n"), 0o644)
-	e.ahead(t, seq, 2, k(0), k(1))
 	time.Sleep(500 * time.Millisecond)
 	if n := e.src.tries("s0"); n != 1 {
 		t.Errorf("s0 fetched %d times; it is whole and named to come", n)

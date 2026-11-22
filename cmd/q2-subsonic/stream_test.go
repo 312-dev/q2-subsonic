@@ -29,6 +29,9 @@ type fakeSrc struct {
 	err   func(u string) error              // optional: the error Get answers u with (nil: none)
 	body  func(u string) (io.Reader, int64) // optional: the answer's body and its Content-Length (-1: none sent)
 	ping  func() error                      // optional: Ping's answer (nil: the server answers)
+	// ranged, optional, answers every Get in place of the rest, with the byte it asked from.
+	ranged func(u string, from int64) (*http.Response, error)
+	froms  []int64
 }
 
 func (f *fakeSrc) Ping(context.Context) error {
@@ -40,10 +43,13 @@ func (f *fakeSrc) Ping(context.Context) error {
 
 func (f *fakeSrc) MediaURL(id, q string) string { return "u:" + id + ":" + q }
 func (f *fakeSrc) PlayURL(id, q string) string  { return "p:" + id + ":" + q }
-func (f *fakeSrc) Get(_ context.Context, u string, _ int64) (*http.Response, error) {
+func (f *fakeSrc) Get(_ context.Context, u string, from int64) (*http.Response, error) {
 	f.mu.Lock()
-	f.urls = append(f.urls, u)
+	f.urls, f.froms = append(f.urls, u), append(f.froms, from)
 	f.mu.Unlock()
+	if f.ranged != nil {
+		return f.ranged(u, from)
+	}
 	if f.onGet != nil {
 		f.onGet()
 	}
