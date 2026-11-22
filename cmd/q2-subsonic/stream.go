@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"path/filepath"
 	"slices"
@@ -54,6 +55,8 @@ type streamer struct {
 	// have ended, and nothing is left to fetch: the firmware leaves .playing alone once it plays
 	// anything else, so this is also how a stream learns that it was left. Default idleAfter.
 	idle time.Duration
+	// removeHook, a test's, takes dropBehind's deletes in place of library.Remove.
+	removeHook func(path string)
 	// gap is the least time between two writes of a queue file: the firmware reads it again when
 	// its mtime's second changes, and FAT32 keeps mtimes in 2 s.
 	gap time.Duration
@@ -265,6 +268,7 @@ type job struct {
 	landed  bool      // fetched once in this run: the firmware may have passed it
 	away    bool      // the server was lost at it: tried on until it answers or the list is left
 	failed  bool      // it ended the run (.stream's fail)
+	partial bool      // in place (grow), cut mid-song: its bytes kept for the player, the next try from their end
 }
 
 // synced reports whether e's file can play from the card: it is there, and no sync is about to
@@ -274,16 +278,24 @@ func (s *streamer) synced(e *library.Entry) bool {
 	return e != nil && exists(e.Path) && (s.moving == nil || !s.moving(e.ID))
 }
 
-// format is the extension and quality a song not on the card plays at.
-func (s *streamer) format(sg subsonic.Song) (ext, q string) {
+// streamQuality is Streaming Quality as set now, "" for none: read from the card's settings.json,
+// so once per list start (or radio refill), not once a song (a 9,199-song Shuffle read it 9,199
+// times before its first request).
+func (s *streamer) streamQuality() string {
+	if s.quality == nil {
+		return ""
+	}
+	return s.quality()
+}
+
+// format is the extension and quality a song not on the card plays at, with Streaming Quality sq.
+func (s *streamer) format(sg subsonic.Song, sq string) (ext, q string) {
 	ext, q = strings.ToLower(sg.Suffix), "original"
 	if s.caps.Playlist && !library.Playable(ext) || !s.caps.Playlist && ext != "flac" && ext != "mp3" {
 		ext, q = "mp3", "mp3-320"
 	}
-	if s.quality != nil {
-		if sq := s.quality(); sq == "mp3-320" || sq == "mp3-128" {
-			ext, q = "mp3", sq
-		}
+	if sq == "mp3-320" || sq == "mp3-128" {
+		ext, q = "mp3", sq
 	}
 	return ext, q
 }
@@ -340,13 +352,13 @@ func (s *streamer) startRun(songs []subsonic.Song, paths []string, from int, cat
 	s.clean(paths...)                // old queue file, stale and half-fetched songs; not a card file that plays as it is
 	m := s.manifest()
 	jobs := make([]job, len(songs))
-	base := s.cacheBase()
+	base, sq := s.cacheBase(), s.streamQuality()
 	for i, sg := range songs {
 		if i < len(paths) && paths[i] != "" {
 			jobs[i] = job{path: paths[i]}
 			continue
 		}
-		jobs[i] = s.jobFor(i, sg, m, base, cat)
+		jobs[i] = s.jobFor(i, sg, m, base, sq, cat)
 	}
 	seq := time.Now().UnixNano() // never reused
 	ctx, cancel := context.WithCancel(context.Background())
@@ -377,6 +389,11 @@ type streamRun struct {
 	from      int
 	quietBy   time.Time // when no song has started for the idle time: a lost server is waited for until then
 	last      int       // the index .playing named last: a song in the list twice is found after it (M25)
+	dropFrom  int       // dropBehind's songs before it are deleted already
+	queueTo   int       // the queue file names the list's songs up to it (queueAhead)
+	wholeCur  int       // plan's: for cur wholeCur, the songs from cur+1 to wholeTo were whole at wholeAt
+	wholeTo   int
+	wholeAt   time.Time
 	seq       int64
 	announced bool
 	stale     string    // .playing at start: ignored until it is written again
@@ -396,14 +413,14 @@ type streamRun struct {
 
 // jobFor is how song sg, the list's i-th, plays: from the card when it is synced, from the stream
 // cache's copy (cat's for a catalogue queue, or one to fetch there), else fetched into the stream folder.
-func (s *streamer) jobFor(i int, sg subsonic.Song, m *library.Manifest, base string, cat *catPlay) job {
+func (s *streamer) jobFor(i int, sg subsonic.Song, m *library.Manifest, base, sq string, cat *catPlay) job {
 	if e := m.Songs[sg.ID]; s.caps.Playlist && s.synced(e) {
 		return job{path: e.Path}
 	}
 	if p := cat.copy(sg.ID); p != "" {
 		return job{path: p, cached: true}
 	}
-	ext, q := s.format(sg)
+	ext, q := s.format(sg, sq)
 	if p := s.cachePath(base, sg, ext, q); p != "" {
 		return job{path: p, fetch: true, quality: q, cached: true}
 	}
@@ -432,9 +449,9 @@ func (r *streamRun) more(cur int) bool {
 		r.refillAt = time.Now().Add(radioRetry)
 		return false
 	}
-	m, base := r.s.manifest(), r.s.cacheBase()
+	m, base, sq := r.s.manifest(), r.s.cacheBase(), r.s.streamQuality()
 	for _, sg := range add {
-		r.jobs = append(r.jobs, r.s.jobFor(len(r.jobs), sg, m, base, nil))
+		r.jobs = append(r.jobs, r.s.jobFor(len(r.jobs), sg, m, base, sq, nil))
 		r.songs = append(r.songs, sg)
 	}
 	select { // the firmware reads the file again only when its mtime's second changes
@@ -474,15 +491,22 @@ func (r *streamRun) protect(lo, hi int) {
 // writeQueue writes the queue file whole, a line a song from the first played on, aside and
 // renamed into place. The firmware waits at a song not there yet and has queued the lines before
 // it, so only that song and the ones after it may change.
+// queueAhead is how far past the song playing the queue file names the list: the firmware reads the
+// file to 256 KB (addon.c M3U_MAX), about 2,300 cache paths, and a 9,199-song Shuffle's are about
+// 1 MB, so the songs past it would never queue. The file is extended once the song playing comes
+// within half of it of the end (run), its lines before then the same, as the firmware needs.
+const queueAhead = 1000
+
 func (r *streamRun) writeQueue() error {
+	end := min(len(r.jobs), max(r.queueTo, max(r.last, r.from)+queueAhead+1))
 	var paths []string
-	for _, j := range r.jobs[r.from:] {
+	for _, j := range r.jobs[r.from:end] {
 		paths = append(paths, j.path)
 	}
 	if err := library.WriteM3U(r.s.root, r.queue, paths); err != nil {
 		return err
 	}
-	r.wrote = time.Now()
+	r.wrote, r.queueTo = time.Now(), end
 	return nil
 }
 
@@ -641,11 +665,10 @@ func (r *streamRun) run() {
 		// firmware has played anything of it.
 		named := now == r.jobs[cur].path && !(now == r.stale && at.Equal(r.staleAt))
 		plan := r.plan(cur)
-		// The songs well behind the one playing go, but not one the plan has to come (Repeat All's
-		// next pass, named in .ahead): deleted, it was fetched again at once, and deleted again.
-		for i := r.from; i < cur-streamWindow; i++ {
-			if r.jobs[i].fetch && !r.jobs[i].cached && !slices.Contains(plan, i) {
-				library.Remove(r.s.root, r.jobs[i].path)
+		r.dropBehind(cur, plan)
+		if r.queue != "" && r.queueTo < len(r.jobs) && cur+queueAhead/2 >= r.queueTo && time.Since(r.wrote) >= r.s.gap {
+			if err := r.writeQueue(); err != nil { // the list's next songs, for the firmware to queue
+				r.s.logf("stream: queue: %v", err)
 			}
 		}
 		if lo := max(r.from, cur-streamWindow); lo != r.keptLo || len(r.jobs) != r.keptN { // the song changed, or one was skipped
@@ -713,6 +736,45 @@ func (r *streamRun) run() {
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
 
+// dropBehind deletes the songs well behind the one playing, cur, but not one the plan has to come
+// (Repeat All's next pass, named in .ahead): deleted, it was fetched again at once, and deleted
+// again. Each song once: the pass is once a second, and a long list's songs passed, every one
+// deleted again each pass, were tens of syscalls apiece. A song kept for the plan, or one fetched
+// again since (a jump back), is looked at again when cur moves.
+func (r *streamRun) dropBehind(cur int, plan []int) {
+	if cur < r.dropFrom {
+		r.dropFrom = r.from // a jump back: what is behind cur now is looked at afresh
+	}
+	lo, kept := max(r.dropFrom, r.from), -1
+	for i := lo; i < cur-streamWindow; i++ {
+		if !r.jobs[i].fetch || r.jobs[i].cached {
+			continue
+		}
+		if slices.Contains(plan, i) {
+			if kept < 0 {
+				kept = i
+			}
+			continue
+		}
+		r.s.remove(r.jobs[i].path)
+	}
+	if hi := cur - streamWindow; hi > r.dropFrom {
+		r.dropFrom = hi
+		if kept >= 0 {
+			r.dropFrom = kept
+		}
+	}
+}
+
+// remove deletes a streamed song from the card (library.Remove), or what a test put in its place.
+func (s *streamer) remove(path string) {
+	if s.removeHook != nil {
+		s.removeHook(path)
+		return
+	}
+	library.Remove(s.root, path)
+}
+
 // fetchWatched fetches job i while a watcher reads the plan again and writes .stream at its pace:
 // a song that leaves the plan meanwhile (another song playing, a new .ahead) is cancelled, and
 // replanned says so, its file already deleted by fetch.
@@ -720,7 +782,9 @@ func (r *streamRun) fetchWatched(i int) (err error, replanned bool) {
 	ctx, cancel := context.WithCancel(r.ctx)
 	defer cancel()
 	r.s.pmu.Lock()
-	r.prog = progress{job: i, movedAt: time.Now(), lastBody: r.prog.lastBody, lastAt: r.prog.lastAt, lastArriving: r.prog.lastArriving}
+	kick := make(chan struct{}, 1)
+	r.prog = progress{job: i, movedAt: time.Now(), lastBody: r.prog.lastBody, lastAt: r.prog.lastAt, lastArriving: r.prog.lastArriving,
+		kick: kick}
 	r.s.pmu.Unlock()
 	left := make(chan struct{})
 	done := make(chan struct{})
@@ -728,11 +792,17 @@ func (r *streamRun) fetchWatched(i int) (err error, replanned bool) {
 		defer close(done)
 		tick := time.NewTicker(min(r.s.poll, cmpOr(r.s.statusEvery, statusEvery)))
 		defer tick.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-tick.C:
+		// .stream at once, its get line there before the first byte, then at each tick, and when the
+		// bytes reach the firmware's start (startGate) or the first comes: the firmware gates a
+		// song's start on the line, which a tick's wait left up to statusEvery old.
+		for first := true; ; first = false {
+			if !first {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tick.C:
+				case <-kick:
+				}
 			}
 			cur, _, _ := r.current()
 			plan := r.plan(cur)
@@ -745,6 +815,9 @@ func (r *streamRun) fetchWatched(i int) (err error, replanned bool) {
 		}
 	}()
 	err = r.fetch(ctx, r.songs[i], r.jobs[i])
+	if i < len(r.jobs) {
+		r.jobs[i].partial = err != nil && r.s.grows() && exists(r.jobs[i].path) && !r.s.whole(r.jobs[i].path)
+	}
 	cancel()
 	<-done
 	r.s.pmu.Lock()
@@ -776,41 +849,70 @@ func (r *streamRun) fetch(ctx context.Context, sg subsonic.Song, j job) (err err
 		return err
 	}
 	defer s.net.Release()
+	part, grow := j.path+".part", s.grows()
+	if grow {
+		part = j.path
+	}
+	// A song cut mid-way in place goes on from the end of its bytes, which the player may be playing
+	// (a Range request; a server that sends it whole instead starts it over).
+	from := int64(0)
+	if st, err := os.Stat(part); grow && j.partial && err == nil {
+		from = st.Size()
+	}
 	s.pmu.Lock()
-	r.prog.began, r.prog.trim = time.Now(), trimTook
+	r.prog.began, r.prog.trim, r.prog.have = time.Now(), trimTook, from
 	s.pmu.Unlock()
-	resp, err := s.src.Get(ctx, s.src.PlayURL(sg.ID, j.quality), 0)
+	tr := &getTrace{}
+	resp, err := s.src.Get(httptrace.WithClientTrace(ctx, tr.trace()), s.src.PlayURL(sg.ID, j.quality), from)
 	if err != nil {
 		return err
 	}
+	s.logf("stream: %q: %s", sg.Title, tr.line(time.Now()))
+	if from > 0 && resp.StatusCode != 206 {
+		from = 0
+		s.pmu.Lock()
+		r.prog.have = 0
+		s.pmu.Unlock()
+	}
 	s.pmu.Lock()
 	r.prog.headers, r.prog.movedAt = time.Now(), time.Now()
+	total := resp.ContentLength // as status writes it in the song's line
+	if total <= 0 {
+		total = expect(sg, j.quality)
+	}
+	r.prog.gate = startGate(total, int64(sg.Duration)*1000)
 	s.pmu.Unlock()
 	defer func() { r.fetchSummary(sg.Title, err) }()
 	defer resp.Body.Close()
 	// A cancel ends a read that waits: net/http's body does so itself, and any other is closed.
 	stopRead := context.AfterFunc(ctx, func() { resp.Body.Close() })
 	defer stopRead()
-	part, grow := j.path+".part", s.grows()
-	if grow {
-		part = j.path
-	}
 	if err := os.MkdirAll(filepath.Dir(part), 0o755); err != nil {
 		return err
 	}
+	keep := false // a cut song's bytes, kept in place and still listed in .growing
 	if grow {
 		if err := s.setGrowing(j.path, true); err != nil {
 			return err
 		}
-		defer s.setGrowing(j.path, false) // after the file is whole, or deleted below
+		defer func() {
+			if !keep {
+				s.setGrowing(j.path, false) // after the file is whole, or deleted below
+			}
+		}()
 	}
-	f, err := os.Create(part)
+	var f *os.File
+	if from > 0 {
+		f, err = os.OpenFile(part, os.O_WRONLY|os.O_APPEND, 0o644)
+	} else {
+		f, err = os.Create(part)
+	}
 	if err != nil {
 		return err
 	}
 	limit := syncer.Limit(resp.ContentLength, expect(sg, j.quality))
 	s.pmu.Lock()
-	r.prog.total = max(resp.ContentLength, 0)
+	r.prog.total = max(resp.ContentLength+from, 0)
 	s.pmu.Unlock()
 	n, err := io.Copy(io.MultiWriter(f, counter{r}), io.LimitReader(resp.Body, limit+1))
 	if err == nil {
@@ -825,10 +927,14 @@ func (r *streamRun) fetch(ctx context.Context, sg subsonic.Song, j job) (err err
 	if err == nil && !grow {
 		err = os.Rename(part, j.path)
 	}
-	if err != nil {
+	if why := syncer.StopReason(err); err != nil && grow && ctx.Err() == nil && n+from > 0 &&
+		!errors.Is(why, syncer.ErrCardFull) && !errors.Is(why, syncer.ErrRefused) {
+		keep = true // the connection lost mid-song: the player reads on, the next try from here
+		r.s.logf("stream: %q: cut at %d bytes; kept, the next try from there", sg.Title, n+from)
+	} else if err != nil {
 		library.Remove(s.root, part)
 	} else if j.cached {
-		s.used.Add(n)
+		s.used.Add(n + from)
 		library.Touch(s.root, j.path, s.now()) // the card's clock may be unset; the app's is the server's
 		if s.avail != nil {
 			s.avail(j.path, true)

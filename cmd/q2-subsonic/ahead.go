@@ -90,7 +90,7 @@ func (s *streamer) whole(path string) bool {
 // arriving in place would be deleted under the player. It returns the path the radio plays the song
 // from: path, or "" when the download failed and the radio fetches the song itself. At most radioIn.
 func (s *streamer) awaitSeed(sg subsonic.Song, path string) string {
-	ext, q := s.format(sg)
+	ext, q := s.format(sg, s.streamQuality())
 	cached := s.cachePath(s.cacheBase(), sg, ext, q)
 	arriving := func(p string) bool {
 		s.gmu.Lock()
@@ -180,10 +180,26 @@ func (r *streamRun) plan(cur int) []int {
 				}
 			}
 			// then the list's: one still to fetch, or one this run fetched that .ahead doesn't name yet
-			// (its queue not yet holding it), which keeps its slot
-			for i := cur + 1; i < len(r.jobs) && slots < a.n; i++ {
-				if j := r.jobs[i]; j.fetch && (j.landed || !r.s.whole(j.path)) && !slices.Contains(out, i) {
+			// (its queue not yet holding it), which keeps its slot. The songs after cur already whole
+			// that take no slot are remembered (wholeTo) for wholeFor and not looked at again: with the
+			// rest of a 9,199-song list in the cache, every pass statted all of it.
+			from := cur + 1
+			if r.wholeCur == cur && r.wholeTo > from && time.Since(r.wholeAt) < wholeFor {
+				from = r.wholeTo
+			} else {
+				r.wholeCur, r.wholeTo, r.wholeAt = cur, from, time.Now()
+			}
+			passed := from == r.wholeTo // only whole songs that take nothing seen since wholeTo
+			for i := from; i < len(r.jobs) && slots < a.n; i++ {
+				j := r.jobs[i]
+				if !j.fetch || slices.Contains(out, i) {
+					passed = passed && !j.fetch
+				} else if j.landed || !r.s.whole(j.path) {
 					add(i)
+					passed = false
+				}
+				if passed {
+					r.wholeTo = i + 1
 				}
 			}
 			return out
@@ -222,12 +238,28 @@ type progress struct {
 	began, headers, first time.Time     // the request sent, its answer's headers, the body's first byte
 	stallMax              time.Duration // the longest wait for bytes
 	trim                  time.Duration // the Stream Cache's trim before the request
-	stallSaid             bool          // the wait now running was logged (stallLog)
+	gate                  int64         // startGate's bytes, at which .stream is written at once (kick)
+	kick                  chan struct{}
+	stallSaid             bool // the wait now running was logged (stallLog)
+}
+
+// startGate is the bytes of a song arriving in place the firmware starts it at (docs/server-library.md
+// "Starting before the end", addon.c m3u_songs and stream_state.c stream_startable): 8 s of it, at
+// least 256 KB, never past its total; 0 when its total or length is unknown (no early write then).
+func startGate(total, lengthMs int64) int64 {
+	if total <= 0 || lengthMs <= 0 {
+		return 0
+	}
+	perS := total / max(lengthMs/1000, 1) // stream_state.c start_bytes' arithmetic, to the byte
+	return min(total, max(256<<10, perS*8))
 }
 
 // stallLog is how long a download goes without a byte before log.txt says so: once while it waits,
 // at a .stream write, and once more when bytes come again. slowStatus is a .stream write (which holds
 // the lock the download's every chunk takes) long enough to say too.
+// wholeFor is how long plan trusts the songs it found whole after the one playing.
+const wholeFor = 30 * time.Second
+
 const (
 	stallLog   = 700 * time.Millisecond
 	slowStatus = 300 * time.Millisecond
@@ -283,7 +315,14 @@ func (r *streamRun) status(plan []int, want int) {
 			if st, err := os.Stat(j.path); err == nil {
 				have, total = st.Size(), st.Size()
 			}
-		case j.away || j.failed:
+		case j.failed:
+			state = "fail"
+		case j.partial: // cut mid-song, its bytes kept: the player waits at their end for the next try
+			state, arriving = "stall", true
+			if st, err := os.Stat(j.path); err == nil {
+				have = st.Size()
+			}
+		case j.away:
 			state = "fail"
 		}
 		fmt.Fprintf(&b, "%s\t%d\t%d\t%d\t%s\n", state, have, total, int64(sg.Duration)*1000, q2spot.Escape(j.path))
@@ -331,8 +370,15 @@ func (c counter) Write(b []byte) (int, error) {
 		p.stallSaid = false
 		said = fmt.Sprintf("stream: %q: bytes again after %d ms at %d bytes", title, gap.Milliseconds(), p.have)
 	}
+	before := p.have
 	p.have += int64(len(b))
 	p.movedAt = now
+	if p.kick != nil && (before == 0 || p.gate > 0 && before < p.gate && p.have >= p.gate) {
+		select {
+		case p.kick <- struct{}{}:
+		default:
+		}
+	}
 	c.r.s.pmu.Unlock()
 	if said != "" {
 		c.r.s.logf("%s", said)
