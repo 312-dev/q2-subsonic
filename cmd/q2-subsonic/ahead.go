@@ -221,6 +221,7 @@ type progress struct {
 	// For log.txt (the user's report of 2026-11-22: the progress stuck at 0.3 MB before a song started):
 	began, headers, first time.Time     // the request sent, its answer's headers, the body's first byte
 	stallMax              time.Duration // the longest wait for bytes
+	trim                  time.Duration // the Stream Cache's trim before the request
 	stallSaid             bool          // the wait now running was logged (stallLog)
 }
 
@@ -353,6 +354,6 @@ func (r *streamRun) fetchSummary(title string, err error) {
 	if err != nil {
 		end = "ended: " + err.Error()
 	}
-	r.s.logf("stream: %q: %d bytes in %d ms, %d KB/s, longest stall %d ms, %s", title, p.have,
-		took.Milliseconds(), rate, p.stallMax.Milliseconds(), end)
+	r.s.logf("stream: %q: %d bytes in %d ms, %d KB/s, longest stall %d ms, the cache's trim before it %d ms, %s",
+		title, p.have, took.Milliseconds(), rate, p.stallMax.Milliseconds(), p.trim.Milliseconds(), end)
 }

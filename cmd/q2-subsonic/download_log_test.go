@@ -33,7 +33,7 @@ func TestADownloadsTimingsAndStallsAreLogged(t *testing.T) {
 	for _, re := range []string{
 		`stream: "T0": headers in \d+ ms, first byte in \d+ ms`,
 		`stream: "T0": bytes again after (7\d\d|[89]\d\d|\d{4,}) ms at 2 bytes`,
-		`stream: "T0": 5 bytes in \d+ ms, \d+ KB/s, longest stall (7\d\d|[89]\d\d|\d{4,}) ms, done`,
+		`stream: "T0": 5 bytes in \d+ ms, \d+ KB/s, longest stall (7\d\d|[89]\d\d|\d{4,}) ms, the cache's trim before it \d+ ms, done`,
 	} {
 		if !regexp.MustCompile(re).MatchString(log) {
 			t.Errorf("no line matching %s in\n%s", re, log)
@@ -52,7 +52,7 @@ func TestASteadyDownloadSaysNoStall(t *testing.T) {
 	e.s.start(songs(1, "flac"), 0)
 	until(t, "the summary", func() bool {
 		b, _ := os.ReadFile(logPath)
-		return strings.Contains(string(b), "longest stall 0 ms, done")
+		return strings.Contains(string(b), "longest stall 0 ms, the cache's trim before it 0 ms, done")
 	})
 	b, _ := os.ReadFile(logPath)
 	if strings.Contains(string(b), "no bytes for") || strings.Contains(string(b), "bytes again") {

@@ -767,15 +767,17 @@ func (r *streamRun) fetchWatched(i int) (err error, replanned bool) {
 // are turned off (M27, R37).
 func (r *streamRun) fetch(ctx context.Context, sg subsonic.Song, j job) (err error) {
 	s := r.s
+	trimmed := time.Now()
 	if s.cacheCap != nil {
 		s.trim(ctx, expect(sg, j.quality), s.reserve())
 	}
+	trimTook := time.Since(trimmed) // a walk of the card when the cache is near its limit
 	if err := s.net.Acquire(ctx, true); err != nil {
 		return err
 	}
 	defer s.net.Release()
 	s.pmu.Lock()
-	r.prog.began = time.Now()
+	r.prog.began, r.prog.trim = time.Now(), trimTook
 	s.pmu.Unlock()
 	resp, err := s.src.Get(ctx, s.src.PlayURL(sg.ID, j.quality), 0)
 	if err != nil {
