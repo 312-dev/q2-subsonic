@@ -720,7 +720,7 @@ func (r *streamRun) fetchWatched(i int) (err error, replanned bool) {
 	ctx, cancel := context.WithCancel(r.ctx)
 	defer cancel()
 	r.s.pmu.Lock()
-	r.prog.job, r.prog.have, r.prog.total, r.prog.movedAt = i, 0, 0, time.Now()
+	r.prog = progress{job: i, movedAt: time.Now(), lastBody: r.prog.lastBody, lastAt: r.prog.lastAt, lastArriving: r.prog.lastArriving}
 	r.s.pmu.Unlock()
 	left := make(chan struct{})
 	done := make(chan struct{})
@@ -765,7 +765,7 @@ func (r *streamRun) fetchWatched(i int) (err error, replanned bool) {
 // syncer's next file: to <final>.part, synced and renamed, or with "grow" in place, listed in
 // .growing until it is whole. Originals come through PlayURL, which servers allow when downloads
 // are turned off (M27, R37).
-func (r *streamRun) fetch(ctx context.Context, sg subsonic.Song, j job) error {
+func (r *streamRun) fetch(ctx context.Context, sg subsonic.Song, j job) (err error) {
 	s := r.s
 	if s.cacheCap != nil {
 		s.trim(ctx, expect(sg, j.quality), s.reserve())
@@ -774,10 +774,17 @@ func (r *streamRun) fetch(ctx context.Context, sg subsonic.Song, j job) error {
 		return err
 	}
 	defer s.net.Release()
+	s.pmu.Lock()
+	r.prog.began = time.Now()
+	s.pmu.Unlock()
 	resp, err := s.src.Get(ctx, s.src.PlayURL(sg.ID, j.quality), 0)
 	if err != nil {
 		return err
 	}
+	s.pmu.Lock()
+	r.prog.headers, r.prog.movedAt = time.Now(), time.Now()
+	s.pmu.Unlock()
+	defer func() { r.fetchSummary(sg.Title, err) }()
 	defer resp.Body.Close()
 	// A cancel ends a read that waits: net/http's body does so itself, and any other is closed.
 	stopRead := context.AfterFunc(ctx, func() { resp.Body.Close() })

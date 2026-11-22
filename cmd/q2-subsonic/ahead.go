@@ -218,7 +218,19 @@ type progress struct {
 	lastBody     string
 	lastAt       time.Time
 	lastArriving bool
+	// For log.txt (the user's report of 2026-11-22: the progress stuck at 0.3 MB before a song started):
+	began, headers, first time.Time     // the request sent, its answer's headers, the body's first byte
+	stallMax              time.Duration // the longest wait for bytes
+	stallSaid             bool          // the wait now running was logged (stallLog)
 }
+
+// stallLog is how long a download goes without a byte before log.txt says so: once while it waits,
+// at a .stream write, and once more when bytes come again. slowStatus is a .stream write (which holds
+// the lock the download's every chunk takes) long enough to say too.
+const (
+	stallLog   = 700 * time.Millisecond
+	slowStatus = 300 * time.Millisecond
+)
 
 // status writes .stream: a line for each planned song the server sends (want the one arriving),
 // at once when a line changes, and every statusEvery while one arrives. Without "ahead" nothing.
@@ -227,9 +239,26 @@ func (r *streamRun) status(plan []int, want int) {
 	if !s.caps.Ahead || s.statusFile == "" {
 		return
 	}
+	var said []string // logged once the lock is let go: log.txt is on the card
+	defer func() {
+		for _, l := range said {
+			s.logf("%s", l)
+		}
+	}()
 	s.pmu.Lock()
 	defer s.pmu.Unlock()
+	held := time.Now()
 	p := &r.prog
+	if want >= 0 && p.job == want && !p.stallSaid && time.Since(p.movedAt) > stallLog {
+		p.stallSaid = true
+		said = append(said, fmt.Sprintf("stream: %q: no bytes for %d ms at %d bytes", r.songs[want].Title,
+			time.Since(p.movedAt).Milliseconds(), p.have))
+	}
+	defer func() {
+		if d := time.Since(held); d > slowStatus {
+			said = append(said, fmt.Sprintf("stream: .stream written in %d ms", d.Milliseconds()))
+		}
+	}()
 	var b strings.Builder
 	fmt.Fprintf(&b, "#Q2STREAM/1\tseq=%d\n", r.playSeq)
 	arriving := false
@@ -282,11 +311,48 @@ type counter struct {
 }
 
 func (c counter) Write(b []byte) (int, error) {
-	if len(b) > 0 {
-		c.r.s.pmu.Lock()
-		c.r.prog.have += int64(len(b))
-		c.r.prog.movedAt = time.Now()
-		c.r.s.pmu.Unlock()
+	if len(b) == 0 {
+		return 0, nil
+	}
+	now, said := time.Now(), ""
+	c.r.s.pmu.Lock()
+	p := &c.r.prog
+	title := ""
+	if p.job >= 0 && p.job < len(c.r.songs) {
+		title = c.r.songs[p.job].Title
+	}
+	if p.first.IsZero() {
+		p.first = now
+		said = fmt.Sprintf("stream: %q: headers in %d ms, first byte in %d ms", title,
+			p.headers.Sub(p.began).Milliseconds(), now.Sub(p.began).Milliseconds())
+	} else if gap := now.Sub(p.movedAt); gap > stallLog {
+		p.stallMax = max(p.stallMax, gap)
+		p.stallSaid = false
+		said = fmt.Sprintf("stream: %q: bytes again after %d ms at %d bytes", title, gap.Milliseconds(), p.have)
+	}
+	p.have += int64(len(b))
+	p.movedAt = now
+	c.r.s.pmu.Unlock()
+	if said != "" {
+		c.r.s.logf("%s", said)
 	}
 	return len(b), nil
+}
+
+// fetchSummary is log.txt's line at a download's end: its bytes, time, waits and rate.
+func (r *streamRun) fetchSummary(title string, err error) {
+	r.s.pmu.Lock()
+	p := r.prog
+	r.s.pmu.Unlock()
+	took := time.Since(p.began)
+	rate := int64(0)
+	if ms := took.Milliseconds(); ms > 0 {
+		rate = p.have * 1000 / ms / 1024
+	}
+	end := "done"
+	if err != nil {
+		end = "ended: " + err.Error()
+	}
+	r.s.logf("stream: %q: %d bytes in %d ms, %d KB/s, longest stall %d ms, %s", title, p.have,
+		took.Milliseconds(), rate, p.stallMax.Milliseconds(), end)
 }
