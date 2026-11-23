@@ -48,10 +48,20 @@ type Server struct {
 
 // New starts a TLS server with user u and password "pw".
 func New() *Server {
-	f := &Server{User: "u", Pwd: "pw", Calls: map[string]int{}}
-	f.Server = httptest.NewTLSServer(http.HandlerFunc(f.serve))
+	f := Unstarted()
+	f.Server = httptest.NewTLSServer(f)
 	return f
 }
+
+// Unstarted is the fake with no listener of its own (Server nil), for a program that serves it
+// itself (cmd/q2-fakesonic) through ServeHTTP.
+func Unstarted() *Server { return &Server{User: "u", Pwd: "pw", Calls: map[string]int{}} }
+
+// ServeHTTP answers one request as the fake does, locking Mu for it.
+func (f *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { f.serve(w, r) }
+
+// Wire is s as the server's JSON has it, for a caller answering calls of its own.
+func (s Song) Wire() map[string]any { return s.wire() }
 
 func (f *Server) find(id string) *Song {
 	for i := range f.Songs {
