@@ -235,15 +235,29 @@ func (s *streamer) reclaimable() (n int64) {
 }
 
 // clearCache deletes every account's kept songs but the protected ones, and reports whether any
-// stayed.
+// stayed. The log says how many went, how many the list playing kept, and how many could not be
+// deleted.
 func (s *streamer) clearCache() (kept bool) {
 	s.cmu.Lock()
 	defer s.cmu.Unlock()
-	for _, f := range s.cacheFiles() {
-		if !s.drop(f) {
-			kept = true
+	start, files := time.Now(), s.cacheFiles()
+	var gone, held, failed int
+	for _, f := range files {
+		if s.drop(f) {
+			gone++
+			continue
 		}
+		kept = true
+		s.kmu.Lock()
+		if s.held(f) {
+			held++
+		} else {
+			failed++
+		}
+		s.kmu.Unlock()
 	}
+	s.logf("cache: cleared %d of %d files in %s; %d kept for the list playing, %d not deleted",
+		gone, len(files), time.Since(start).Round(time.Millisecond), held, failed)
 	return kept
 }
 

@@ -561,6 +561,7 @@ func (d *daemon) settingsOp(op string, _ ...string) q2spot.Reply {
 			d.mu.Lock()
 			d.clearAt = time.Now()
 			d.mu.Unlock()
+			d.log.Printf("cache: Clear Cache pressed; a second press within %s clears", clearWithin)
 			return q2spot.Reply{Message: "Press again to clear the cache"}
 		}
 		done := make(chan bool, 1)
