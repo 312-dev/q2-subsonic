@@ -26,6 +26,9 @@ import (
 // noted in the folder's .none, as a round notes it, and not asked again; a fetch that failed (the
 // server out of reach, no room on the card) is not asked again for coverFailFor. The minute's
 // rounds (slCovers) are untouched, and a cover saved while they were settled leaves them settled.
+//
+// Car Audio's q2-iap asks the same way through .coverask-iap, its own seq space, answered in
+// coverack-iap= (coverAskIapPath); its fetches take no network slot.
 
 // Answers to a .coverask line, in the state file's coverack=<seq> <code>.
 const (
@@ -52,18 +55,44 @@ type coverAskState struct {
 
 func (d *daemon) coverAskPath() string { return filepath.Join(d.tmp, "q2-"+appID+".coverask") }
 
-// coverTick queues the request file's new lines and starts answering them in the background.
+// coverAskIapPath is Car Audio's ask file: q2-iap's, the car on the USB cable (q2-coda's
+// patch/q2_iap.c), the same lines as .coverask in a seq space of its own, answered in the state
+// file's coverack-iap=<seq> <code>, the cover saved where .coverask's go. Its fetches take no
+// network slot (slotNone): the car waits on its cover while a song downloads.
+func (d *daemon) coverAskIapPath() string { return filepath.Join(d.tmp, "q2-"+appID+".coverask-iap") }
+
+// coverSource is one ask file: where it is, its state, how its answers are written, its slot.
+type coverSource struct {
+	path func() string
+	st   *coverAskState
+	ack  func(string) error
+	slot int
+}
+
+func (d *daemon) coverSources() []coverSource {
+	return []coverSource{{d.coverAskPath, &d.cov, d.state.setCoverAck, slotFirst},
+		{d.coverAskIapPath, &d.covIap, d.state.setCoverAckIap, slotNone}}
+}
+
+// coverTick queues each request file's new lines and starts answering them in the background.
 func (d *daemon) coverTick() {
-	b, err := os.ReadFile(d.coverAskPath())
+	for _, src := range d.coverSources() {
+		d.coverTickFrom(src)
+	}
+}
+
+func (d *daemon) coverTickFrom(src coverSource) {
+	b, err := os.ReadFile(src.path())
 	if err != nil {
 		return
 	}
-	d.cov.mu.Lock()
-	defer d.cov.mu.Unlock()
-	if string(b) == d.cov.raw && d.cov.seen != nil {
+	st := src.st
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if string(b) == st.raw && st.seen != nil {
 		return
 	}
-	d.cov.raw = string(b)
+	st.raw = string(b)
 	seen := map[string]bool{}
 	for _, l := range strings.Split(string(b), "\n") {
 		l = strings.TrimRight(l, "\r")
@@ -71,29 +100,30 @@ func (d *daemon) coverTick() {
 			continue
 		}
 		seen[l] = true
-		if !d.cov.seen[l] {
-			d.cov.queue = append(d.cov.queue, l)
+		if !st.seen[l] {
+			st.queue = append(st.queue, l)
 		}
 	}
-	d.cov.seen = seen
-	if len(d.cov.queue) > 0 && !d.cov.running {
-		d.cov.running = true
-		d.spawn(d.coverRun)
+	st.seen = seen
+	if len(st.queue) > 0 && !st.running {
+		st.running = true
+		d.spawn(func() { d.coverRun(src) })
 	}
 }
 
-// coverRun answers the queued lines, one at a time, until none is left.
-func (d *daemon) coverRun() {
+// coverRun answers src's queued lines, one at a time, until none is left.
+func (d *daemon) coverRun(src coverSource) {
+	st := src.st
 	for {
-		d.cov.mu.Lock()
-		if len(d.cov.queue) == 0 {
-			d.cov.running = false
-			d.cov.mu.Unlock()
+		st.mu.Lock()
+		if len(st.queue) == 0 {
+			st.running = false
+			st.mu.Unlock()
 			return
 		}
-		line := d.cov.queue[0]
-		d.cov.queue = d.cov.queue[1:]
-		d.cov.mu.Unlock()
+		line := st.queue[0]
+		st.queue = st.queue[1:]
+		st.mu.Unlock()
 		f := strings.Fields(line)
 		if len(f) == 0 {
 			continue
@@ -104,14 +134,15 @@ func (d *daemon) coverRun() {
 		}
 		code := coverNotOurs
 		if len(f) == 3 {
-			code = d.coverFor(f[1], f[2])
+			code = d.coverFor(st, f[1], f[2], src.slot)
 		}
-		d.state.setCoverAck(f[0] + " " + strconv.Itoa(code))
+		src.ack(f[0] + " " + strconv.Itoa(code))
 	}
 }
 
-// coverFor puts album id's cover at px where the firmware reads it, and says how that went.
-func (d *daemon) coverFor(px, id string) int {
+// coverFor puts album id's cover at px where the firmware reads it, and says how that went; st's
+// failures are remembered, and slot is how its request takes the network slot (fetchCover).
+func (d *daemon) coverFor(st *coverAskState, px, id string, slot int) int {
 	var cv catalogue.Covers
 	switch px {
 	case strconv.Itoa(catalogue.BigPx):
@@ -132,9 +163,9 @@ func (d *daemon) coverFor(px, id string) int {
 		return coverFailed
 	}
 	key := acct + " " + px + " " + id
-	d.cov.mu.Lock()
-	at, failed := d.cov.failed[key]
-	d.cov.mu.Unlock()
+	st.mu.Lock()
+	at, failed := st.failed[key]
+	st.mu.Unlock()
 	if failed && time.Since(at) < coverFailFor {
 		return coverFailed
 	}
@@ -143,17 +174,17 @@ func (d *daemon) coverFor(px, id string) int {
 	}
 	fail := func(err error) int {
 		d.log.Printf("covers: the car's %s (%s px): %s", id, px, applog.Redact(err.Error()))
-		d.cov.mu.Lock()
-		if d.cov.failed == nil {
-			d.cov.failed = map[string]time.Time{}
+		st.mu.Lock()
+		if st.failed == nil {
+			st.failed = map[string]time.Time{}
 		}
-		for k, at := range d.cov.failed {
+		for k, at := range st.failed {
 			if time.Since(at) >= coverFailFor {
-				delete(d.cov.failed, k)
+				delete(st.failed, k)
 			}
 		}
-		d.cov.failed[key] = time.Now()
-		d.cov.mu.Unlock()
+		st.failed[key] = time.Now()
+		st.mu.Unlock()
 		return coverFailed
 	}
 	before := d.coversKey()
@@ -176,7 +207,7 @@ func (d *daemon) coverFor(px, id string) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), coverAskIn)
 	defer cancel()
-	jpg, err := d.fetchCover(ctx, cl, id, cv, true)
+	jpg, err := d.fetchCover(ctx, cl, id, cv, slot)
 	var ae *subsonic.APIError
 	switch {
 	case err == errNoCover || errors.As(err, &ae) && (ae.HTTP == 404 || ae.Code == 70):

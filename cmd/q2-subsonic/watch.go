@@ -70,9 +70,11 @@ func ticks(d time.Duration, kick <-chan struct{}, fn func()) {
 	}
 }
 
-// pressNames are the firmware's requests in tmp that start a list: answered at a kick.
+// pressNames are the firmware's requests in tmp answered at a kick: a press that starts a list, and
+// a cover the car waits for.
 func (d *daemon) pressNames() (string, []string) {
-	return d.tmp, []string{filepath.Base(d.catplayPath()), filepath.Base(d.radioPath())}
+	return d.tmp, []string{filepath.Base(d.catplayPath()), filepath.Base(d.radioPath()),
+		filepath.Base(d.coverAskPath()), filepath.Base(d.coverAskIapPath())}
 }
 
 // getTrace times a stream request's steps (net/http/httptrace), for the line log.txt gets at its

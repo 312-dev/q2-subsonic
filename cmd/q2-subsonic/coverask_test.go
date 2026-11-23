@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"image/jpeg"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/andsuor/q2-subsonic/internal/catalogue"
 	"github.com/andsuor/q2-subsonic/internal/fakesonic"
+	"github.com/andsuor/q2-subsonic/internal/syncer"
 )
 
 // newCoverRig is a catRig whose catalogue is written (al0 to al2), each album's cover on the server
@@ -215,4 +217,65 @@ func TestCoverAskKeepsTheRoundsSettled(t *testing.T) {
 	if n := r.calls("getCoverArt") - calls; n != 1 {
 		t.Fatal("getCoverArt calls:", n)
 	}
+}
+
+// askCoverIap writes Car Audio's .coverask-iap (q2-iap's) and has the app read it.
+func (r *catRig) askCoverIap(lines ...string) {
+	os.WriteFile(filepath.Join(r.tmp, "q2-subsonic.coverask-iap"), []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+	r.coverTick()
+}
+
+// Car Audio asks through its own file: the cover is saved where .coverask's go and answered in
+// coverack-iap=; the two files' seqs are their own, so the same seq in each is two asks, each
+// answered under its own key, neither disturbing the other.
+func TestCoverAskIapHasItsOwnFileAndAck(t *testing.T) {
+	r := newCoverRig(t)
+	r.askCoverIap("5 512 al0")
+	eventually(t, "coverack-iap=5 0", func() bool { return r.stateKey("coverack-iap") == "5 0" })
+	r.bg.Wait()
+	if w := coverWidth(filepath.Join(r.bigCovers().Dir, "al0.jpg")); w != 512 {
+		t.Fatal("al0's 512 px cover:", w)
+	}
+	if got := r.stateKey("coverack"); got != "" {
+		t.Fatalf("coverack=%q from Car Audio's ask", got)
+	}
+	r.askCover("5 160 al1") // the same seq in the other file
+	r.answered(t, "5 0")
+	if got := r.stateKey("coverack-iap"); got != "5 0" {
+		t.Fatalf("coverack-iap=%q", got)
+	}
+	if w := coverWidth(filepath.Join(r.covers().Dir, "al1.jpg")); w != 160 {
+		t.Fatal("al1's 160 px cover:", w)
+	}
+	r.askCoverIap("5 512 al0", "6 512 al2") // its old line is not asked again
+	eventually(t, "coverack-iap=6 0", func() bool { return r.stateKey("coverack-iap") == "6 0" })
+	r.bg.Wait()
+	if n := r.calls("getCoverArt"); n != 3 {
+		t.Fatal("getCoverArt calls:", n)
+	}
+}
+
+// Car Audio's cover is fetched while a song's download holds the network slot (the car waits on
+// it); the remote's .coverask still takes its turn at the slot.
+func TestCoverAskIapNeedsNoNetworkSlot(t *testing.T) {
+	r := newCoverRig(t)
+	if err := syncer.Net.Acquire(context.Background(), true); err != nil { // a song downloading
+		t.Fatal(err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			syncer.Net.Release()
+		}
+	}()
+	r.askCoverIap("9 512 al1")
+	eventually(t, "coverack-iap=9 0", func() bool { return r.stateKey("coverack-iap") == "9 0" })
+	r.askCover("3 512 al2")
+	time.Sleep(100 * time.Millisecond)
+	if got := r.stateKey("coverack"); got != "" {
+		t.Fatalf("the remote's cover fetched past the slot: coverack=%q", got)
+	}
+	syncer.Net.Release()
+	released = true
+	r.answered(t, "3 0")
 }

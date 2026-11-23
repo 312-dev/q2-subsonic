@@ -286,7 +286,7 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 				if a := art[id]; a != "" {
 					ask = a
 				}
-				jpg, err := d.fetchCover(ctx, cl, ask, cv, false)
+				jpg, err := d.fetchCover(ctx, cl, ask, cv, slotNormal)
 				mu.Lock()
 				var ae *subsonic.APIError
 				switch {
@@ -366,14 +366,24 @@ func (d *daemon) slSettle() {
 	d.sl.mu.Unlock()
 }
 
-// fetchCover is album id's cover from the server, cv's side at most, as a baseline JPEG. With prio
-// (a cover the car is waiting for) it takes the network slot before a sync's next file, as a
-// stream's song does.
-func (d *daemon) fetchCover(ctx context.Context, cl *subsonic.Client, id string, cv catalogue.Covers, prio bool) ([]byte, error) {
-	if err := syncer.Net.Acquire(ctx, prio); err != nil {
-		return nil, err
+// How a cover's request takes the network slot (fetchCover): behind a sync's next file, before it
+// (a cover the car's remote waits for, as a stream's song does), or not at all (Car Audio's, which
+// the car waits on while a song downloads holding the slot: a cover is a few KB).
+const (
+	slotNormal = iota
+	slotFirst
+	slotNone
+)
+
+// fetchCover is album id's cover from the server, cv's side at most, as a baseline JPEG, taking
+// the network slot as slot says.
+func (d *daemon) fetchCover(ctx context.Context, cl *subsonic.Client, id string, cv catalogue.Covers, slot int) ([]byte, error) {
+	if slot != slotNone {
+		if err := syncer.Net.Acquire(ctx, slot == slotFirst); err != nil {
+			return nil, err
+		}
+		defer syncer.Net.Release()
 	}
-	defer syncer.Net.Release()
 	quiet := *cl
 	quiet.Log = nil // a line per cover would push the walk's history out of log.txt
 	ctx, cancel := context.WithTimeout(ctx, slCoverIn)

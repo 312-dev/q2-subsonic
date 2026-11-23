@@ -112,6 +112,7 @@ type stateKeys struct {
 	ack    string // radioack=: the last .radio request answered, "<seq> <code>"; "" none
 	lyrAck string // lyricsack=: the last .lrcask request answered, "<seq> <code>"; "" none
 	covAck string // coverack=: the last .coverask line answered, "<seq> <code>"; "" none
+	covIap string // coverack-iap=: the last .coverask-iap line answered, "<seq> <code>"; "" none
 	resAck string // resumeack=: the last .resume request answered, "<seq> <code>"; "" none
 	offAck string // offlineack=: the last .offline request answered, "<seq> <words>" (offline.go); "" none
 	reach  string // reach=: "down <code>" while the server is out of reach (reach.go); "" none
@@ -154,6 +155,13 @@ func (s *stateKeys) setCoverAck(v string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.covAck = v
+	return s.flush()
+}
+
+func (s *stateKeys) setCoverAckIap(v string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.covIap = v
 	return s.flush()
 }
 
@@ -240,6 +248,9 @@ func (s *stateKeys) flush() error {
 	}
 	if s.covAck != "" {
 		m["coverack"] = s.covAck
+	}
+	if s.covIap != "" {
+		m["coverack-iap"] = s.covIap
 	}
 	if s.resAck != "" {
 		m["resumeack"] = s.resAck
@@ -376,6 +387,7 @@ type daemon struct {
 	radio              radioState    // the radio playing and its recent songs (radio.go)
 	lyr                lyricsState   // the firmware's lyrics requests (lyrics.go)
 	cov                coverAskState // the car's cover requests (coverask.go)
+	covIap             coverAskState // Car Audio's cover requests, q2-iap's (coverask.go)
 	resume             resumeState   // the firmware's request to resume a restored stream (resume.go)
 	reach              *reach        // whether the server can be reached, for the status row (reach.go)
 	off                offlineState  // the firmware's Sync Offline requests (offline.go)
