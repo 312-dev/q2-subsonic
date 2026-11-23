@@ -20,6 +20,15 @@ var bundle []byte
 
 const retryAfter = 30 * time.Second
 
+// An HTTP/2 connection's health check (newTransport): a ping after h2PingAfter with nothing read,
+// the connection closed after h2PingWait with no answer, so a dead one is left within 15 s. A
+// download reads all the time and is never pinged; a quiet one is pinged about every 10 s (an
+// answer is a read), a few bytes each.
+const (
+	h2PingAfter = 10 * time.Second
+	h2PingWait  = 5 * time.Second
+)
+
 var (
 	once sync.Once
 	pool *x509.CertPool
@@ -173,7 +182,11 @@ func newTransport(roots *x509.CertPool, timeout time.Duration) *http.Transport {
 	// HTTP/2 when the server offers it (a song's download, its playing-now report, a cover and the
 	// ping share one connection, and a download cancelled at a skip resets its stream, not the
 	// connection), and TLS sessions resumed: each full handshake is a chain check in pure Go on
-	// the Q2's CPU. An idle connection goes after 90 s rather than being held and probed.
+	// the Q2's CPU. An idle connection goes after 90 s rather than being held. An HTTP/2
+	// connection that has read nothing for h2PingAfter is pinged, and closed when no answer comes
+	// in h2PingWait: one that dies without a reset (the Wi-Fi joining another network takes its
+	// address) is otherwise kept, as a request timed out on it resets only its stream, and every
+	// request goes to it until the kernel gives the connection up, about 15 minutes on.
 	t := &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   timeout,
@@ -183,6 +196,7 @@ func newTransport(roots *x509.CertPool, timeout time.Duration) *http.Transport {
 		MaxIdleConnsPerHost:   4,
 		TLSClientConfig: &tls.Config{RootCAs: roots, Time: Now, MinVersion: tls.VersionTLS12,
 			ClientSessionCache: tls.NewLRUClientSessionCache(16)},
+		HTTP2: &http.HTTP2Config{SendPingTimeout: h2PingAfter, PingTimeout: h2PingWait},
 	}
 	if roots == pool {
 		transports[timeout] = t
