@@ -66,6 +66,8 @@ func TestASteadyDownloadSaysNoStall(t *testing.T) {
 
 // .stream at once when a download starts (its get line before the first byte) and when the bytes reach the
 // firmware's start (startGate), not at the next statusEvery: the firmware starts the song from the line.
+// The line says the bytes there when it is written, the gate or more: bytes that come after it are in the
+// next tick's line, which this test does not wait for.
 func TestStreamLineAtOnceAndAtTheStartGate(t *testing.T) {
 	e := aheadEnv(t, false)
 	e.s.statusEvery, e.s.poll = 2*time.Second, 2*time.Second
@@ -75,7 +77,10 @@ func TestStreamLineAtOnceAndAtTheStartGate(t *testing.T) {
 	first := make(chan struct{})
 	e.src.body = func(string) (io.Reader, int64) {
 		<-first
-		return io.MultiReader(strings.NewReader(strings.Repeat("x", 330<<10)), held{hold}), int64(total)
+		// the gate's bytes and 8 KB more at once, the last 2 KB a moment later: the line at the gate is
+		// written as the gate is crossed, whatever it has by then, and the bytes after it wait for a tick
+		return io.MultiReader(strings.NewReader(strings.Repeat("x", 328<<10)), &later{d: 300 * time.Millisecond,
+			r: strings.NewReader(strings.Repeat("x", 2<<10))}, held{hold}), int64(total)
 	}
 	list := songs(1, "flac")
 	list[0].Duration, list[0].Size = 10, int64(total)
@@ -90,12 +95,31 @@ func TestStreamLineAtOnceAndAtTheStartGate(t *testing.T) {
 	at := time.Now()
 	close(first)
 	until(t, "the line at the gate", func() bool {
-		l := e.statusLines(t)
-		return len(l) == 2 && strings.HasPrefix(l[1], fmt.Sprintf("get\t%d\t", 330<<10))
+		l, have := e.statusLines(t), 0
+		if len(l) != 2 {
+			return false
+		}
+		_, err := fmt.Sscanf(l[1], "get\t%d\t", &have)
+		return err == nil && have >= 320<<10 // the gate, or past it by what came with it
 	})
 	if d := time.Since(at); d > 500*time.Millisecond {
 		t.Fatalf("the gate's line %v after the bytes", d)
 	}
+}
+
+// later is a body that sends r after waiting d.
+type later struct {
+	d     time.Duration
+	r     io.Reader
+	slept bool
+}
+
+func (l *later) Read(p []byte) (int, error) {
+	if !l.slept {
+		time.Sleep(l.d)
+		l.slept = true
+	}
+	return l.r.Read(p)
 }
 
 // held is a body that sends nothing more until hold closes, then ends.

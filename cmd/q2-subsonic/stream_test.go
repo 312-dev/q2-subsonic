@@ -120,15 +120,19 @@ func (e *env) stream(i int, ext string) string {
 	return fmt.Sprintf("%s/.subsonic/stream/%04d - T%d [s%d].%s", e.root, i, i, i, ext)
 }
 
+// until waits for ok, looking every 5 ms, and fails after 10 s: a deadline for a test that hangs, not a
+// bound on the app (a busy machine took over 2 s to fetch four songs over the fake server's TLS).
 func until(t *testing.T, what string, ok func() bool) {
 	t.Helper()
-	for i := 0; i < 400; i++ {
+	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); {
 		if ok() {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("timeout: " + what)
+	if !ok() {
+		t.Fatal("timeout: " + what)
+	}
 }
 
 func (e *env) queue(t *testing.T) (path, body string) {

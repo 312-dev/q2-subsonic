@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -12,10 +13,13 @@ import (
 // not take Download Ahead's slots while the list still has songs to fetch.
 
 // fourWhole starts a list of six songs, fetches s0 to s3 as the firmware's .ahead asks, and then plays
-// s3, the last of them queued. k(i) is song i's path.
-func fourWhole(t *testing.T, cache bool) (e *env, seq string, k func(int) string) {
+// s3, the last of them queued. k(i) is song i's path. set, if any, changes the streamer before it starts.
+func fourWhole(t *testing.T, cache bool, set ...func(*streamer)) (e *env, seq string, k func(int) string) {
 	t.Helper()
 	e = aheadEnv(t, false)
+	for _, f := range set {
+		f(e.s)
+	}
 	k = func(i int) string { return e.stream(i, "flac") }
 	if cache {
 		e.cacheOn(1<<30, 1<<40)
@@ -59,8 +63,10 @@ func TestAheadEmptyAtTheQueuesEndFetchesTheListsNext(t *testing.T) {
 // n bounds the songs to fetch: n=1 fetches s4 and not s5, whole songs named or not.
 func TestAheadWholeSongsNamedStillBoundedByN(t *testing.T) {
 	e, seq, k := fourWhole(t, true)
-	os.WriteFile(e.playing, []byte(k(3)+"\n"), 0o644)
+	// .ahead before .playing, as the firmware writes them (addon.c stream_poll: ahead_poll first): the
+	// other way round, the app can see s3 playing under the old .ahead's n=3 and fetch s5
 	e.ahead(t, seq, 1, k(0), k(1))
+	os.WriteFile(e.playing, []byte(k(3)+"\n"), 0o644)
 	if waitTries(e, "s4", 2*time.Second) == 0 {
 		t.Fatalf("s4 never fetched; GETs: %v", e.src.got())
 	}
@@ -105,5 +111,30 @@ func TestAheadCacheOffKeepsTheSongsNamedToCome(t *testing.T) {
 	}
 	if e.src.tries("s4") == 0 {
 		t.Errorf("s4 never fetched; GETs: %v", e.src.got())
+	}
+}
+
+// A song whole on the card while its fetch has yet to return keeps its slot: the download's watcher
+// plans in that moment too, and saw s4 whole and not yet landed, as a song of Repeat All's next pass
+// that takes none, gave its slot to s5, cut s4's fetch as left, and fetched s5 (n=1).
+func TestAheadSongWholeBeforeItsFetchReturnsKeepsItsSlot(t *testing.T) {
+	var late atomic.Bool // s0 to s3 land at once; s4 waits after it is whole
+	e, seq, k := fourWhole(t, true, func(s *streamer) {
+		s.statusEvery = 5 * time.Millisecond // the download's watcher plans every 5 ms
+		s.landed = func() {
+			if late.Load() {
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	})
+	late.Store(true)
+	e.ahead(t, seq, 1, k(0), k(1))
+	os.WriteFile(e.playing, []byte(k(3)+"\n"), 0o644)
+	if waitTries(e, "s4", 2*time.Second) == 0 {
+		t.Fatalf("s4 never fetched; GETs: %v", e.src.got())
+	}
+	time.Sleep(400 * time.Millisecond)
+	if n := e.src.tries("s5"); n != 0 {
+		t.Errorf("s5 fetched %d times; n=1 is s4 alone", n)
 	}
 }
