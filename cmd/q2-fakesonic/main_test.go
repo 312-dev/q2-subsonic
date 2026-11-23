@@ -43,7 +43,7 @@ func get(t *testing.T, u, rng string) (*http.Response, []byte) {
 }
 
 func serve(t *testing.T, n int) (*fake, *httptest.Server, *httptest.Server) {
-	k := newFake(n, 4, 1000, "seam", "seam")
+	k := newFake(n, 4, 1000, "Title ", "seam", "seam")
 	s, c := httptest.NewServer(k), httptest.NewServer(k.control())
 	t.Cleanup(func() { s.Close(); c.Close() })
 	return k, s, c
@@ -98,7 +98,7 @@ func TestACutSendsItsBytesHoldsThenCloses(t *testing.T) {
 func TestAlbumsSimilarSongsAndADelay(t *testing.T) {
 	_, s, c := serve(t, 10)
 	_, b := get(t, signed(s.URL, "getAlbum", url.Values{"id": {"al1"}}), "")
-	if !strings.Contains(string(b), `"id":"s5"`) || !strings.Contains(string(b), `"id":"s8"`) || strings.Contains(string(b), `"id":"s9"`) {
+	if !strings.Contains(string(b), `"id":"s5"`) || !strings.Contains(string(b), `"title":"Title s8"`) || strings.Contains(string(b), `"id":"s9"`) {
 		t.Fatalf("getAlbum al1: %s", b)
 	}
 	http.PostForm(c.URL+"/delay", url.Values{"op": {"getSimilarSongs2"}, "ms": {"150"}})

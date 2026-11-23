@@ -59,13 +59,13 @@ type fake struct {
 	per    int
 }
 
-// library is n songs s1 to sn in albums al0, al1... of per songs each, in order, tracks 1 to per,
-// each size bytes of FLAC.
-func library(n, per int, size int64) []fakesonic.Song {
+// library is n songs s1 to sn, titled title+id, in albums al0, al1... of per songs each, in order,
+// tracks 1 to per, each size bytes of FLAC.
+func library(n, per int, size int64, title string) []fakesonic.Song {
 	out := make([]fakesonic.Song, n)
 	for i := range out {
 		id, a := "s"+strconv.Itoa(i+1), i/per
-		out[i] = fakesonic.Song{ID: id, Title: "Title " + id, Album: "Album " + strconv.Itoa(a), AlbumID: "al" + strconv.Itoa(a),
+		out[i] = fakesonic.Song{ID: id, Title: title + id, Album: "Album " + strconv.Itoa(a), AlbumID: "al" + strconv.Itoa(a),
 			Artist: "Artist", Suffix: "flac", Year: 2000, Track: i%per + 1, Duration: 180, Size: size}
 	}
 	return out
@@ -291,9 +291,9 @@ func (k *fake) control() http.Handler {
 	return m
 }
 
-func newFake(n, per int, size int64, user, pwd string) *fake {
+func newFake(n, per int, size int64, title, user, pwd string) *fake {
 	f := fakesonic.Unstarted()
-	f.User, f.Pwd, f.Songs, f.Count, f.LastScan = user, pwd, library(n, per, size), int64(n), "2026-11-20T12:00:00Z"
+	f.User, f.Pwd, f.Songs, f.Count, f.LastScan = user, pwd, library(n, per, size, title), int64(n), "2026-11-20T12:00:00Z"
 	return &fake{f: f, cuts: map[string]cut{}, delays: map[string]time.Duration{}, albums: (n + per - 1) / per, per: per}
 }
 
@@ -303,13 +303,14 @@ func main() {
 	n := flag.Int("songs", 30, "songs in the library")
 	per := flag.Int("album", 10, "songs to an album")
 	size := flag.Int64("size", 64<<10, "each song's bytes")
+	title := flag.String("title", "Title ", "each song's title, before its id (a test that wants them first in a list sorts them so)")
 	user := flag.String("user", "seam", "the user name it signs in")
 	pwd := flag.String("password", "seam", "that user's password")
 	flag.Parse()
 	if *n < 1 || *per < 1 || *size < 8 {
 		log.Fatal("q2-fakesonic: -songs and -album must be at least 1, -size at least 8")
 	}
-	k := newFake(*n, *per, *size, *user, *pwd)
+	k := newFake(*n, *per, *size, *title, *user, *pwd)
 	l, err := net.Listen("tcp", *listen)
 	if err != nil {
 		log.Fatal(err)
