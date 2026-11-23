@@ -829,11 +829,12 @@ func (r *streamRun) fetchWatched(i int) (err error, replanned bool) {
 		}
 	}()
 	err = r.fetch(ctx, r.songs[i], r.jobs[i])
-	if i < len(r.jobs) {
-		r.jobs[i].partial = err != nil && r.s.grows() && exists(r.jobs[i].path) && !r.s.whole(r.jobs[i].path)
-	}
+	partial := i < len(r.jobs) && err != nil && r.s.grows() && exists(r.jobs[i].path) && !r.s.whole(r.jobs[i].path)
 	cancel()
-	<-done
+	<-done // the watcher reads r.jobs (status): written only once it has ended
+	if i < len(r.jobs) {
+		r.jobs[i].partial = partial
+	}
 	r.s.pmu.Lock()
 	r.prog.job = -1
 	r.s.pmu.Unlock()
