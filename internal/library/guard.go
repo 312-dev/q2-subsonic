@@ -146,6 +146,23 @@ func LrcFile(path string) string { return strings.TrimSuffix(path, filepath.Ext(
 // IsSong reports whether name, a file's, is a song's by its extension (Playable).
 func IsSong(name string) bool { return Playable(strings.TrimPrefix(filepath.Ext(name), ".")) }
 
+// AppendOwned adds data to the end of path, a file root owns (checkOwned), made when missing, with no
+// fsync: for a record where a line lost to a power cut costs nothing but asking again.
+func AppendOwned(root, path string, data []byte) error {
+	if err := checkOwned(root, path, nil); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
 // Remove is the package Remove that also accepts the playlist files recorded in m.
 func (m *Manifest) Remove(root, path string) error { return remove(root, path, m) }
 

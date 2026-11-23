@@ -15,6 +15,9 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ### Changed
 
+- A Radio whose server is slow to answer no longer replaces a list you started while it waited.
+- Syncing onto a card with many songs writes far less: the record of synced songs was rewritten whole every 30 s of a sync (42 MB for 200 songs onto a card of 5,000 in a test); it is now saved every 5 minutes, or after a share of the library's size in songs (7 MB). An album cover goes to the card as it downloads instead of into memory first.
+- A song without lyrics adds one line to the app's record of them, rather than writing the whole record again; list covers that the Q2 can show as they come are kept as they are rather than decoded and encoded again; a long list's first page asks for at most 500 covers.
 - A long list such as a Shuffle of the whole library starts sooner: its start read the Streaming Quality setting from the card once for every song (9,199 times), and now reads it once. The app also notices a press at once rather than at its next second, writes the download's progress at once and when the song can start, and keeps one connection to the server for a song's requests (HTTP/2 where the server offers it, TLS sessions resumed), so a skip no longer costs a fresh handshake.
 - Songs past about the first 2,300 of a very long list now play: the Q2 reads the list's queue file only so far, and the app writes it a thousand songs ahead of the one playing, growing it as the list plays.
 - A song whose download is cut by a dropped connection goes on from where it stopped, rather than ending there and being downloaded again from the start.

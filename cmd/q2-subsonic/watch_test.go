@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -104,5 +106,36 @@ func TestAnIdleRunLoopWakesOnPlaying(t *testing.T) {
 	until(t, "s1 seen", func() bool { mu.Lock(); defer mu.Unlock(); return len(reported) > 0 })
 	if d := time.Since(at); d > 150*time.Millisecond {
 		t.Fatalf(".playing seen %v after it changed", d)
+	}
+}
+
+// A song without lyrics adds a line to lyrics-none.txt rather than writing the whole file again;
+// the file is written whole (dropping the oldest) only past a quarter more than lyricsNoneMax.
+func TestLyricsNoneAppends(t *testing.T) {
+	d := newTestDaemon(t, &nav{albums: 1, songsPer: 1}, "", true)
+	var b strings.Builder
+	now := time.Now().Unix()
+	for i := 0; i < 4000; i++ {
+		fmt.Fprintf(&b, "acct old%d %d\n", i, now)
+	}
+	old := b.String()
+	os.WriteFile(d.lyricsNonePath(), []byte(old), 0o644)
+	for i := 0; i < 100; i++ {
+		d.lyricsNoneAdd(fmt.Sprintf("acct new%d", i))
+	}
+	got, _ := os.ReadFile(d.lyricsNonePath())
+	if !strings.HasPrefix(string(got), old) || strings.Count(string(got), "\n") != 4100 {
+		t.Fatalf("written again whole: %d lines", strings.Count(string(got), "\n"))
+	}
+	d.lyr.none, d.lyr.lines = nil, 0 // read again, as a restart reads it
+	if !d.lyricsNoneHas("acct new99") || !d.lyricsNoneHas("acct old0") {
+		t.Fatal("a key lost")
+	}
+	for i := 100; i < 2300; i++ { // past 6,250 lines: written whole, the 5,000 newest
+		d.lyricsNoneAdd(fmt.Sprintf("acct new%d", i))
+	}
+	got, _ = os.ReadFile(d.lyricsNonePath())
+	if n := strings.Count(string(got), "\n"); n > lyricsNoneMax+lyricsNoneMax/4 {
+		t.Fatalf("%d lines", n)
 	}
 }

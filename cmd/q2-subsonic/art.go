@@ -165,7 +165,7 @@ func (c *artCache) want(rows []q2spot.Row, covers map[string]string, first bool)
 			continue
 		}
 		pending, asked[k] = true, true
-		if c.flying == nil || c.flying.key != k {
+		if (c.flying == nil || c.flying.key != k) && len(jobs) < artQueue { // a long list's first rows too
 			jobs = append(jobs, artJob{k, id})
 		}
 	}
@@ -273,6 +273,15 @@ func (c *artCache) fetch(ctx context.Context, id string) ([]byte, error) {
 	}
 	if len(b) > artBody {
 		return nil, errNoCover
+	}
+	return rowBaseline(b)
+}
+
+// rowBaseline is a row's cover b as the firmware takes it: as it came when it is a baseline JPEG
+// already (asBaseline, its markers read), else decoded and encoded again (baseline).
+func rowBaseline(b []byte) ([]byte, error) {
+	if jpg, ok := asBaseline(b, artMaxPx); ok {
+		return jpg, nil
 	}
 	return baseline(b)
 }

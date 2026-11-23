@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/andsuor/q2-subsonic/internal/subsonic"
 )
 
 // stateKey is the state file's value for key, "" when it has none.
@@ -227,5 +229,23 @@ func TestRadioStartedAgainOnTheSameSong(t *testing.T) {
 			t.Fatalf("radio=%q", d.stateKey("radio"))
 		}
 		d.ask(strconv.Itoa(seq) + "0 stop")
+	}
+}
+
+// A Radio whose server is slow to answer does not replace a list the user started meanwhile: its
+// place in line is taken at the press, and its answer, older than the list, is dropped.
+func TestASlowRadioDoesNotReplaceALaterList(t *testing.T) {
+	n := &nav{albums: 4, songsPer: 6, simHold: make(chan struct{})}
+	d := newTestDaemon(t, n, "playlist radio", true)
+	d.ask("7 start " + d.streamed("al3.2"))
+	eventually(t, "the radio asked the server", func() bool { return n.reqs("getSimilarSongs2") == 1 })
+	album := []subsonic.Song{{ID: "al1.0", Title: "Song 0", Suffix: "flac"}, {ID: "al1.1", Title: "Song 1", Suffix: "flac"}}
+	d.startStream(d.nextPlay(), album, 0) // the user starts a list while the radio waits
+	d.waitQueued(t, 2)
+	close(n.simHold)
+	eventually(t, "the radio answered", func() bool { return d.stateKey("radioack") != "" })
+	time.Sleep(200 * time.Millisecond)
+	if q := d.queueLines(); len(q) != 2 || streamID(q[0]) != "al1.0" {
+		t.Fatalf("the list the user started was replaced: %v", q)
 	}
 }

@@ -76,6 +76,7 @@ type nav struct {
 	noLastfm         bool                                                    // getTopSongs and getSimilarSongs2 are not implemented (HTTP 501)
 	simCode          int                                                     // getSimilarSongs2 fails with this Subsonic code
 	simStep          bool                                                    // getSimilarSongs2's k-th answer is albums k-1 and k: half of it the last answer's
+	simHold          chan struct{}                                           // getSimilarSongs2 waits for it
 	art              bool                                                    // albums and playlists name a cover: their own id
 	cover            func(id string, w http.ResponseWriter, r *http.Request) // getCoverArt's answer; nil is a 64 px JPEG
 	noArtistID       bool                                                    // songs name no artistId
@@ -400,6 +401,9 @@ func (n *nav) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"value": "", "albumCount": 1}, map[string]any{"value": "ambient"},
 			map[string]any{"value": "Hip Hop: Old", "albumCount": 1}}})
 	case "getRandomSongs", "getTopSongs", "getSimilarSongs2":
+		if op == "getSimilarSongs2" && n.simHold != nil {
+			<-n.simHold
+		}
 		key := map[string]string{"getRandomSongs": "randomSongs", "getTopSongs": "topSongs", "getSimilarSongs2": "similarSongs2"}[op]
 		switch {
 		case n.noLastfm && op != "getRandomSongs":

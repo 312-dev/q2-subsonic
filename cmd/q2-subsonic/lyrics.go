@@ -60,6 +60,7 @@ type lyricsState struct {
 	server string           // the server calls is for
 	calls  int              // lyrUnknown…lyrNoCalls
 	none   map[string]int64 // "<account> <id>": when the server had none for it (Unix seconds); nil until read
+	lines  int              // lines in lyrics-none.txt, appended ones included (lyricsNoneAdd)
 }
 
 func (d *daemon) lyricsPath() string     { return filepath.Join(d.tmp, "q2-"+appID+".lrcask") }
@@ -244,6 +245,7 @@ func (d *daemon) lyricsNoneLoad() {
 	defer f.Close()
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
+		d.lyr.lines++
 		f := strings.Fields(sc.Text())
 		if len(f) != 3 {
 			continue
@@ -262,14 +264,22 @@ func (d *daemon) lyricsNoneHas(key string) bool {
 	return ok && time.Since(time.Unix(at, 0)) < lyricsNoneFor
 }
 
-// lyricsNoneAdd remembers key and writes the file again, without the songs past lyricsNoneFor and,
-// over lyricsNoneMax, the oldest.
+// lyricsNoneAdd remembers key: a line added to the file's end (a later line for a key wins when it
+// is read), and the file written again whole, without the songs past lyricsNoneFor and over
+// lyricsNoneMax the oldest, only once it holds a quarter more lines than lyricsNoneMax. Each song
+// without lyrics wrote and synced the whole file, up to 5,000 lines, while the lyrics page was open.
 func (d *daemon) lyricsNoneAdd(key string) {
 	d.lyr.mu.Lock()
 	defer d.lyr.mu.Unlock()
 	d.lyricsNoneLoad()
 	now := time.Now()
 	d.lyr.none[key] = now.Unix()
+	if d.lyr.lines < lyricsNoneMax+lyricsNoneMax/4 {
+		if err := library.AppendOwned(d.card, d.lyricsNonePath(), []byte(fmt.Sprintf("%s %d\n", key, now.Unix()))); err == nil {
+			d.lyr.lines++
+			return
+		}
+	}
 	type kept struct {
 		key string
 		at  int64
@@ -294,4 +304,5 @@ func (d *daemon) lyricsNoneAdd(key string) {
 	if err := library.WriteOwned(d.card, d.lyricsNonePath(), []byte(b.String())); err != nil {
 		d.log.Printf("lyrics: %v", err)
 	}
+	d.lyr.lines = len(all)
 }

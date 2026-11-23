@@ -138,10 +138,16 @@ func (d *daemon) radioMore(gen int) []subsonic.Song {
 // radioStart plays a radio of seed (a song's or an artist's id), titled title: first, when given, the
 // seed song (playing from path when that is a card file), then the server's similar songs not played
 // lately. The reply's message is what Now Playing toasts; an error when there is nothing to play.
-func (d *daemon) radioStart(ctx context.Context, cl *subsonic.Client, seed, title string, first *subsonic.Song, path string) (string, error) {
+// seq is the play's place in line, taken (nextPlay) when it was pressed, before any request to the
+// server: a list the user starts while the server answers comes after it, and its answer, older,
+// is dropped (errRadioLate) rather than replacing that list (the server's answer takes up to radioIn).
+func (d *daemon) radioStart(ctx context.Context, cl *subsonic.Client, seq int, seed, title string, first *subsonic.Song, path string) (string, error) {
 	similar, err := cl.SimilarSongs(ctx, seed, radioSongs)
 	if err != nil && !errors.Is(err, subsonic.ErrNotFound) { // Navidrome's answer when it knows none
 		return "", err
+	}
+	if !d.latestPlay(seq) {
+		return "", errRadioLate
 	}
 	d.radio.mu.Lock()
 	var songs []subsonic.Song
@@ -166,7 +172,6 @@ func (d *daemon) radioStart(ctx context.Context, cl *subsonic.Client, seed, titl
 		return "", errNoSimilar
 	}
 	d.radioEnd()
-	seq := d.nextPlay()
 	d.radio.mu.Lock()
 	d.radio.gen++
 	gen := d.radio.gen
@@ -187,6 +192,9 @@ func (d *daemon) radioStart(ctx context.Context, cl *subsonic.Client, seed, titl
 }
 
 var errNoSimilar = errors.New("no similar songs")
+
+// errRadioLate is a radio whose server answered after the user started another list.
+var errRadioLate = errors.New("another list started while the server answered")
 
 // songOf is the server song a card path plays: a Library row's (the catalogue's path), a streamed or
 // cached file's (the id in its name), or a synced song's; "" for a song that isn't the server's.
@@ -264,12 +272,18 @@ func (d *daemon) radioTick() {
 		ack(radioNotOurs)
 		return
 	}
+	play := d.nextPlay() // its place in line now, before the server is asked (radioStart)
 	d.spawn(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), radioIn)
 		defer cancel()
 		sg, err := cl.Song(ctx, id)
 		if err == nil {
-			_, err = d.radioStart(ctx, cl, id, sg.Title, &sg, keep)
+			_, err = d.radioStart(ctx, cl, play, id, sg.Title, &sg, keep)
+		}
+		if errors.Is(err, errRadioLate) { // the user's later list plays: no "isn't available" toast for it
+			d.log.Printf("radio: like %s: %v", id, err)
+			ack(radioStarted)
+			return
 		}
 		if err != nil {
 			d.log.Printf("radio: like %s: %v", id, err)
@@ -283,16 +297,19 @@ func (d *daemon) radioTick() {
 // artistRadio is an artist page's Radio row: a radio of songs like the artist's.
 func (d *daemon) artistRadio(ctx context.Context, cl *subsonic.Client, arg string) q2spot.Reply {
 	_, id := parseKey(arg)
+	seq := d.nextPlay()
 	name := "Artist"
 	if it, err := d.item(ctx, cl, "artist", id); err == nil && it.name != "" {
 		name = it.name
 	}
-	msg, err := d.radioStart(ctx, cl, id, name, nil, "")
+	msg, err := d.radioStart(ctx, cl, seq, id, name, nil, "")
 	switch {
 	case subsonic.Unsupported(err):
 		return q2spot.Fail(q2spot.Unavailable, notHere)
 	case errors.Is(err, errNoSimilar):
 		return q2spot.Fail(q2spot.Unavailable, "No similar songs found")
+	case errors.Is(err, errRadioLate):
+		return q2spot.Reply{} // another list started meanwhile, and plays
 	case err != nil:
 		return d.errToast(err)
 	}

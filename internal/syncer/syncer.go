@@ -627,7 +627,7 @@ func (j *job) downloads() error {
 				return err
 			}
 			j.remove(old.Path)
-		case j.unsaved >= saveEvery || j.Now().Sub(j.saved) >= saveAfter:
+		case j.unsaved >= max(saveEvery, len(j.m.Songs)/saveShare) || j.Now().Sub(j.saved) >= saveAfter:
 			if err := j.save(); err != nil {
 				return err
 			}
@@ -809,9 +809,14 @@ func (j *job) removals() error {
 }
 
 const (
-	saveEvery   = 20               // downloads recorded per manifest save (M18) ...
-	saveAfter   = 30 * time.Second // ... or this long since the last
-	removeBatch = 100              // removals dropped from the manifest per save
+	// A save rewrites the whole manifest (every song synced, about 240 bytes each) and fsyncs it on
+	// the card: a sync onto a card of 5,000 songs saved 36 times for 200 downloads, 42 MB. It saves
+	// after saveEvery downloads, or a saveShare-th of the songs recorded when that is more, or
+	// saveAfter since the last; a crash fetches again at most what came since (M18).
+	saveEvery   = 20 // downloads recorded per manifest save ...
+	saveShare   = 50
+	saveAfter   = 5 * time.Minute // ... or this long since the last
+	removeBatch = 100             // removals dropped from the manifest per save
 )
 
 // ErrOffline, ErrCardFull and ErrRefused pause a sync: every song would fail the same way.
@@ -1184,14 +1189,9 @@ func (r *Runner) cover(ctx context.Context, w plan.Want) {
 			return err
 		}
 		defer resp.Body.Close()
-		b, err := io.ReadAll(io.LimitReader(resp.Body, maxCover+1))
-		if err != nil {
-			return err
-		}
-		if len(b) > maxCover {
-			return errors.New("cover larger than 16 MiB")
-		}
-		return q2.WriteFile(c, b)
+		// to the card as it comes, not into RAM first: a server that ignores size= sends the
+		// original, up to maxCover, which was a 16 MiB buffer on a Q2 with about 67 MB to spare
+		return writeLimited(c, resp.Body, maxCover)
 	}()
 	if err != nil && ctx.Err() == nil {
 		r.fail(w.Song.ID, w.Song.Title, "cover", err)
@@ -1199,6 +1199,33 @@ func (r *Runner) cover(ctx context.Context, w plan.Want) {
 }
 
 const maxCover = 16 << 20
+
+// writeLimited writes r to path as q2.WriteFile does (a .tmp synced on the card, then renamed), as it
+// reads, and fails with nothing written when r holds more than limit bytes.
+func writeLimited(path string, r io.Reader, limit int64) error {
+	tmp := path + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	n, err := io.Copy(f, io.LimitReader(r, limit+1))
+	if err == nil && n > limit {
+		err = fmt.Errorf("cover larger than %d MiB", limit>>20)
+	}
+	if err == nil && q2.OnCard(path) {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
+}
 
 // art puts playlist name's picture beside its .m3u, named as it, for Q2 Pod's playlist art: the
 // server's own picture for the playlist, or the one it makes from album covers. It is fetched at
