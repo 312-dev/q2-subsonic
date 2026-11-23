@@ -132,3 +132,15 @@ func TestAnAlbumsCoverIsAJPEGOfTheSizeAsked(t *testing.T) {
 		t.Fatalf("no album al9: %s", b)
 	}
 }
+
+func TestWithAudioEverySongIsThatFile(t *testing.T) {
+	k, s, _ := serve(t, 2)
+	k.audio = []byte("fLaC-a real file-1000 bytes")
+	for i := range k.f.Songs {
+		k.f.Songs[i].Size = int64(len(k.audio))
+	}
+	_, b := get(t, signed(s.URL, "download", url.Values{"id": {"s2"}}), "bytes=5-")
+	if string(b) != string(k.audio[5:]) {
+		t.Fatalf("%q", b)
+	}
+}

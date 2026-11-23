@@ -12,6 +12,8 @@
 //
 // Every album has a cover (getCoverArt with its album id), a grey JPEG of the size asked.
 //
+// With -audio FILE every song is that file's bytes, so a real player can decode it.
+//
 // It signs in user -user with password -password (token auth). It prints "listening <url>" once
 // both listeners are up.
 package main
@@ -57,6 +59,7 @@ type fake struct {
 	delays map[string]time.Duration
 	albums int
 	per    int
+	audio  []byte // every song's bytes when set (-audio), else body's pattern
 }
 
 // library is n songs s1 to sn, titled title+id, in albums al0, al1... of per songs each, in order,
@@ -239,7 +242,11 @@ func (k *fake) media(w http.ResponseWriter, r *http.Request, op, id string) {
 	}
 	buf := make([]byte, 0, 32<<10)
 	for off := from; off < end; off++ {
-		buf = append(buf, body(id, off))
+		if k.audio != nil {
+			buf = append(buf, k.audio[off])
+		} else {
+			buf = append(buf, body(id, off))
+		}
 		if len(buf) == cap(buf) || off == end-1 {
 			if _, err := w.Write(buf); err != nil {
 				return
@@ -303,6 +310,7 @@ func main() {
 	n := flag.Int("songs", 30, "songs in the library")
 	per := flag.Int("album", 10, "songs to an album")
 	size := flag.Int64("size", 64<<10, "each song's bytes")
+	audio := flag.String("audio", "", "a file every song is, byte for byte (a real FLAC, for a player that decodes it); -size is then its size")
 	title := flag.String("title", "Title ", "each song's title, before its id (a test that wants them first in a list sorts them so)")
 	user := flag.String("user", "seam", "the user name it signs in")
 	pwd := flag.String("password", "seam", "that user's password")
@@ -310,7 +318,16 @@ func main() {
 	if *n < 1 || *per < 1 || *size < 8 {
 		log.Fatal("q2-fakesonic: -songs and -album must be at least 1, -size at least 8")
 	}
+	var bytes []byte
+	if *audio != "" {
+		b, err := os.ReadFile(*audio)
+		if err != nil || len(b) < 8 {
+			log.Fatalf("q2-fakesonic: -audio: %v (%d bytes)", err, len(b))
+		}
+		bytes, *size = b, int64(len(b))
+	}
 	k := newFake(*n, *per, *size, *title, *user, *pwd)
+	k.audio = bytes
 	l, err := net.Listen("tcp", *listen)
 	if err != nil {
 		log.Fatal(err)

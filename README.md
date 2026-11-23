@@ -128,7 +128,7 @@ needs Go 1.21 or later (go.mod requires Go 1.27 and pins the toolchain, which an
 For tests on a computer, the app and a fake server build for the machine they run on:
 
     CGO_ENABLED=0 go build -o q2-subsonic ./cmd/q2-subsonic    # flags -dir, -card and -tmp put its folders anywhere
-    CGO_ENABLED=0 go build -o q2-fakesonic ./cmd/q2-fakesonic  # a scripted Subsonic server: -songs, -album, -size, -title, -listen, -ctl
+    CGO_ENABLED=0 go build -o q2-fakesonic ./cmd/q2-fakesonic  # a scripted Subsonic server: -songs, -album, -size, -title, -audio, -listen, -ctl
 
 `q2-fakesonic` serves a made-up library (user `seam`, password `seam`) with Range on every song and a cover for every album, and its control socket (`-ctl`) cuts a song's download or slows a call while it runs (see its source's comment). Q2 Muse's seam test (`test/subsonic_seam.py`) runs this app against it with the firmware's own code on the other side; `--app` points it at a checkout, to run before a ZIP is cut.
 
