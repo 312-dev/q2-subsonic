@@ -1,14 +1,16 @@
 // q2-fakesonic is internal/fakesonic as a program, for tests outside this repository: the firmware's
 // seam test (q2-pod test/subsonic_seam.py) runs the real app against it. It serves a scripted
 // library of -songs songs in albums of -album, every call the app makes (internal/fakesonic's, and
-// stream, download, getAlbum, getAlbumList2, getSimilarSongs2, scrobble and a few that answer
-// empty), with Range on a song's bytes. A second listener, -ctl (a Unix socket), scripts it while it
+// stream, download, getAlbum, getAlbumList2, getSimilarSongs2, getCoverArt, scrobble and a few that
+// answer empty), with Range on a song's bytes. A second listener, -ctl (a Unix socket), scripts it while it
 // runs and reports what it was asked:
 //
 //	GET  /log                      every song request so far, JSON [{op, id, from, status}]
 //	POST /cut?id=s5&at=N&hold=MS   the next request of s5 sends up to byte N, then nothing for MS ms,
 //	                               then closes: a download cut mid-song
 //	POST /delay?op=OP&ms=MS        every OP call answered MS ms late (getSimilarSongs2: a slow Radio)
+//
+// Every album has a cover (getCoverArt with its album id), a grey JPEG of the size asked.
 //
 // It signs in user -user with password -password (token auth). It prints "listening <url>" once
 // both listeners are up.
@@ -19,6 +21,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"log"
 	"net"
 	"net/http"
@@ -120,6 +124,9 @@ func (k *fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "stream", "download":
 		k.media(w, r, op, q.Get("id"))
 		return
+	case "getCoverArt":
+		k.cover(w, q.Get("id"), q.Get("size"))
+		return
 	case "getAlbum", "getAlbumList2", "getSimilarSongs2", "scrobble", "getOpenSubsonicExtensions", "getGenres",
 		"getArtists", "getRandomSongs", "getTopSongs", "getLyricsBySongId", "getArtist", "getArtistInfo2":
 	default:
@@ -177,6 +184,26 @@ func (k *fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// cover answers getCoverArt for an album id (al0, al1...): a grey JPEG of the size asked, 160 px
+// without one; any other id is error 70.
+func (k *fake) cover(w http.ResponseWriter, id, size string) {
+	a, err := strconv.Atoi(strings.TrimPrefix(id, "al"))
+	if !strings.HasPrefix(id, "al") || err != nil || a < 0 || a >= k.albums {
+		k.fail(w, 70, "Artwork not found")
+		return
+	}
+	px, err := strconv.Atoi(size)
+	if err != nil || px < 1 || px > 1024 {
+		px = 160
+	}
+	img := image.NewGray(image.Rect(0, 0, px, px))
+	for i := range img.Pix {
+		img.Pix[i] = byte(a * 37)
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	jpeg.Encode(w, img, nil)
+}
+
 // media sends song id's bytes from the Range asked, or holds and cuts them as a /cut said.
 func (k *fake) media(w http.ResponseWriter, r *http.Request, op, id string) {
 	s, have := k.song(id)
@@ -207,7 +234,7 @@ func (k *fake) media(w http.ResponseWriter, r *http.Request, op, id string) {
 	}
 	w.WriteHeader(status)
 	end := s.Size
-	if cutting && c.at > from {
+	if cutting && c.at >= from {
 		end = min(end, c.at)
 	}
 	buf := make([]byte, 0, 32<<10)

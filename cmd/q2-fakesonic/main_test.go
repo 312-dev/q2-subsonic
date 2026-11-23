@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"image/jpeg"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -82,6 +84,15 @@ func TestACutSendsItsBytesHoldsThenCloses(t *testing.T) {
 	if _, again := get(t, signed(s.URL, "stream", url.Values{"id": {"s1"}}), ""); len(again) != 1000 {
 		t.Fatalf("the cut is once: then %d bytes", len(again))
 	}
+	// a cut at byte 0 sends nothing at all before it closes
+	http.PostForm(c.URL+"/cut", url.Values{"id": {"s2"}, "at": {"0"}, "hold": {"50"}})
+	resp, err = http.Get(signed(s.URL, "stream", url.Values{"id": {"s2"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := io.ReadAll(resp.Body); len(b) != 0 || err == nil {
+		t.Fatalf("cut at 0: %d bytes, err %v", len(b), err)
+	}
 }
 
 func TestAlbumsSimilarSongsAndADelay(t *testing.T) {
@@ -107,5 +118,17 @@ func TestAWrongTokenIsRefused(t *testing.T) {
 	_, b := get(t, s.URL+"/rest/ping?u=seam&t=00&s=salt&f=json", "")
 	if !strings.Contains(string(b), `"code":40`) {
 		t.Fatalf("%s", b)
+	}
+}
+
+func TestAnAlbumsCoverIsAJPEGOfTheSizeAsked(t *testing.T) {
+	_, s, _ := serve(t, 8)
+	resp, b := get(t, signed(s.URL, "getCoverArt", url.Values{"id": {"al1"}, "size": {"512"}}), "")
+	img, err := jpeg.Decode(bytes.NewReader(b))
+	if resp.Header.Get("Content-Type") != "image/jpeg" || err != nil || img.Bounds().Dx() != 512 {
+		t.Fatalf("%v %v", err, resp.Header)
+	}
+	if _, b := get(t, signed(s.URL, "getCoverArt", url.Values{"id": {"al9"}}), ""); !strings.Contains(string(b), `"code":70`) {
+		t.Fatalf("no album al9: %s", b)
 	}
 }
