@@ -435,6 +435,10 @@ func TestClearCacheNeedsTwoPresses(t *testing.T) {
 		t.Fatalf("armed row %+v", row)
 	}
 	d.do("report") // another setting pressed: not armed any more
+	d.stream.protect([]string{b}) // a list plays: the row says what a clear keeps
+	if row, _ := find(d.do("settings"), "Clear Cache"); row.Subtitle != "5 MB used · keeps the list playing" {
+		t.Fatalf("row with a list playing %+v", row)
+	}
 	if r := d.do("cacheclr"); r.Message != "Press again to clear the cache" || !exists(a) {
 		t.Fatalf("press after another setting: %q", r.Message)
 	}

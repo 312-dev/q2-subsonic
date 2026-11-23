@@ -609,6 +609,8 @@ func (d *daemon) settingsOp(op string, _ ...string) q2spot.Reply {
 		switch n := d.stream.used.Load(); {
 		case armed:
 			used = "Press again to clear it"
+		case n > 0 && d.stream.protecting(): // a clear keeps them, so the row says so before it is pressed
+			used = size(n) + " used · keeps the list playing"
 		case n > 0:
 			used = size(n) + " used"
 		case d.stream.counted.Load():

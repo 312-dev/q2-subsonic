@@ -100,6 +100,13 @@ func (s *streamer) protect(paths []string) {
 	s.kmu.Unlock()
 }
 
+// protecting reports whether any kept song is protected now: Settings says Clear Cache keeps them.
+func (s *streamer) protecting() bool {
+	s.kmu.Lock()
+	defer s.kmu.Unlock()
+	return len(s.keep) > 0
+}
+
 type cacheFile struct {
 	path string
 	size int64
