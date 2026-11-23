@@ -106,6 +106,7 @@ type streamer struct {
 	gmu                     sync.Mutex
 	growing                 map[string]bool // songs arriving in place ("grow"), as .growing lists them
 	pmu                     sync.Mutex      // the run's progress, and .stream's writes
+	landed                  func()          // tests: called once a fetched song is whole, before fetch returns
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -941,6 +942,9 @@ func (r *streamRun) fetch(ctx context.Context, sg subsonic.Song, j job) (err err
 	}
 	if err == nil && !grow {
 		err = os.Rename(part, j.path)
+	}
+	if err == nil && s.landed != nil {
+		s.landed()
 	}
 	if why := syncer.StopReason(err); err != nil && grow && ctx.Err() == nil && n+from > 0 &&
 		!errors.Is(why, syncer.ErrCardFull) && !errors.Is(why, syncer.ErrRefused) {

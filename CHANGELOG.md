@@ -30,6 +30,7 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 - **Settings → Diagnostics** lists what went wrong and the syncs, newest first, kept for a week: a song skipped or that couldn't stream, the server going out of reach, a sync that finished or stopped, each with why and when. A row opens its **Details** in plain words (what, while doing what, why, when, the song, the server, and a sentence on what it means) instead of "Op: stream". The first page no longer shows a loose "Skipped …" row.
 - A song that can't be fetched because the server is out of reach, or a proxy answers 502, 503 or 504 for it, is waited for instead of skipped, so Now Playing can say why and offer Retry and Skip; a list played from the Q2's Library no longer drops its songs that aren't on the card.
 - Settings' Clear Cache row says "keeps the list playing" beside the size while a list's songs are held, so it is clear before the press that those songs stay.
+- Download Ahead set to 1 no longer sometimes fetches a second song: the song arriving could be seen whole on the card a moment before its download finished, and its place went to the next one.
 - The log says when Clear Cache is pressed and, after the second press, how many songs it deleted, kept for the list playing, or could not delete.
 - The app's log says when its background jobs start and how long they take (the storage walk, the server library's checks).
 

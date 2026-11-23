@@ -179,8 +179,8 @@ func (r *streamRun) plan(cur int) []int {
 					add(i)
 				}
 			}
-			// then the list's: one still to fetch, or one this run fetched that .ahead doesn't name yet
-			// (its queue not yet holding it), which keeps its slot. The songs after cur already whole
+			// then the list's: one still to fetch, or one this run fetched or is fetching that .ahead
+			// doesn't name yet (its queue not yet holding it), which keeps its slot. The songs after cur already whole
 			// that take no slot are remembered (wholeTo) for wholeFor and not looked at again: with the
 			// rest of a 9,199-song list in the cache, every pass statted all of it.
 			from := cur + 1
@@ -190,11 +190,16 @@ func (r *streamRun) plan(cur int) []int {
 				r.wholeCur, r.wholeTo, r.wholeAt = cur, from, time.Now()
 			}
 			passed := from == r.wholeTo // only whole songs that take nothing seen since wholeTo
+			// the song arriving keeps its slot: it is whole on the card a moment before its fetch
+			// returns and it is landed, and the download's watcher plans in that moment too
+			r.s.pmu.Lock()
+			arriving := r.prog.job
+			r.s.pmu.Unlock()
 			for i := from; i < len(r.jobs) && slots < a.n; i++ {
 				j := r.jobs[i]
 				if !j.fetch || slices.Contains(out, i) {
 					passed = passed && !j.fetch
-				} else if j.landed || !r.s.whole(j.path) {
+				} else if j.landed || i == arriving || !r.s.whole(j.path) {
 					add(i)
 					passed = false
 				}
