@@ -226,17 +226,26 @@ func (d *daemon) slCheck() {
 	if rewrite {
 		d.slWrite()
 	}
+	start := time.Now()
 	cl := d.client()
 	if cl == nil {
 		return
 	}
+	asked := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), slPingIn)
 	err := cl.Ping(ctx)
 	cancel()
+	answered := time.Now()
 	was := d.slServer(err)
 	d.slRetry(err)
 	switch {
 	case err != nil:
+		// a failed check far past the ping's own limit says where the time went: before the ping
+		// (the client, behind d.mu), the ping, or recording the answer (the state file, the log)
+		if took := time.Since(start); took > slPingIn+2*time.Second {
+			what = fmt.Sprintf("pinged (%v before the ping, %v the ping, %v after it)", asked.Sub(start).Round(time.Millisecond),
+				answered.Sub(asked).Round(time.Millisecond), time.Since(answered).Round(time.Millisecond))
+		}
 		return
 	case was != 1, d.caps.Playlists && catalogue.PlsPending(d.dir):
 		d.sl.checking.Store(true)

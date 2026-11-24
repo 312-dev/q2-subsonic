@@ -18,6 +18,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"path"
 	"strconv"
@@ -183,13 +184,16 @@ const (
 	idleAfter = 30 * time.Second
 )
 
-// do sends one GET for u, from byte from when from > 0, and logs it redacted. Its body fails with
-// ErrUnreachable once one Read waits longer than the idle time, so a stalled server can't hang a
-// download; time between Reads (a consumer yielding to a stream) doesn't count. A request to the
-// home address that gets no answer is sent to the main address, which takes the next minute's too.
+// do sends one GET for u, from byte from when from > 0, and logs it redacted, a failure with why in
+// brackets (failWhy: the name, the connect, the handshake, or how far the request got). Its body
+// fails with ErrUnreachable once one Read waits longer than the idle time, so a stalled server
+// can't hang a download; time between Reads (a consumer yielding to a stream) doesn't count. A
+// request to the home address that gets no answer is sent to the main address, which takes the
+// next minute's too.
 func (c *Client) do(parent context.Context, op, u string, from int64) (*http.Response, error) {
 	ctx, cancel := context.WithCancel(parent)
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	tr := newReqTrace() // how far it got, for a failure's line (failWhy)
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, tr.hooks()), "GET", u, nil)
 	if err != nil {
 		cancel()
 		return nil, &APIError{Op: op, Msg: applog.Redact(err.Error()), kind: ErrUnreachable}
@@ -201,7 +205,7 @@ func (c *Client) do(parent context.Context, op, u string, from int64) (*http.Res
 	if err != nil {
 		live := ctx.Err() == nil // not cancelled by the caller
 		cancel()
-		c.logf("GET %s -> %v", u, err)
+		c.logf("GET %s -> %v [%s]", u, err, failWhy(err, tr))
 		if main, ok := c.offHome(u); ok && live {
 			c.home.rest.Store(time.Now().Add(homeRest).UnixNano())
 			return c.do(parent, op, main, from)
