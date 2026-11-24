@@ -934,3 +934,146 @@ func TestPlaylistCoversComeFirst(t *testing.T) {
 		t.Fatalf("log.txt has no %q:\n%s", want, b)
 	}
 }
+
+// backlogRig is a signed-in rig with 10 albums whose covers come slowly, so a round of covers
+// (shortened) saves a few and leaves the rest; nothing has used the app for longer than idleAfter.
+// cable is the state record's cable field ("in", "out", or "" for no record) and status the
+// charger's.
+func backlogRig(t *testing.T, cable, status string) *catRig {
+	t.Helper()
+	r := newCatRig(t, "catalogue", fakesonic.Library(30)) // al0 to al9
+	r.f.Mu.Lock()
+	r.f.Covers = map[string][]byte{}
+	for i := range 10 {
+		r.f.Covers[fmt.Sprintf("al%d", i)] = testJPEG(t, 160)
+	}
+	r.f.CoverIn = 40 * time.Millisecond
+	r.f.Mu.Unlock()
+	pass, state, battery := slCoverPass, q2State, batteryStatus
+	t.Cleanup(func() { slCoverPass, q2State, batteryStatus = pass, state, battery })
+	slCoverPass = 150 * time.Millisecond
+	q2State, batteryStatus = filepath.Join(r.tmp, "q2-state"), filepath.Join(r.tmp, "battery")
+	if cable != "" {
+		os.WriteFile(q2State, []byte("screen:off power:running cable:"+cable+" battery:57 play:stopped out:jack\n"), 0o644)
+	}
+	os.WriteFile(batteryStatus, []byte(status+"\n"), 0o644)
+	r.mu.Lock()
+	r.lastReq = time.Now().Add(-idleAfter - time.Minute)
+	r.mu.Unlock()
+	r.check(t) // the first copy and the catalogue
+	return r
+}
+
+func (r *catRig) nextIn() time.Duration {
+	r.sl.mu.Lock()
+	defer r.sl.mu.Unlock()
+	return time.Until(r.sl.nextPing)
+}
+
+func (r *catRig) coversSaved() int {
+	n := 0
+	for i := range 10 {
+		if _, err := os.Stat(filepath.Join(r.dir, catalogue.CoversName, fmt.Sprintf("al%d.jpg", i))); err == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// On the cable (the state record's cable:in, with the charger held off as Charge Limit holds it at
+// 80%), a round that saved covers with more left is followed by the next slBacklogPause after it,
+// and the app does not take the idle exit; once every cover is there the quiet schedule and the
+// idle exit are back. 6,174 albums at about 88 covers a round every 10 minutes took 12 hours, and
+// the app exited after 30 quiet minutes with 2,990 left (the owner's log, 2026-11-24).
+func TestCoverBacklogRunsBackToBackOnTheCable(t *testing.T) {
+	r := backlogRig(t, "in", "Not charging")
+	r.check(t)
+	if n := r.coversSaved(); n == 0 || n == 10 {
+		t.Fatalf("the first round saved %d of 10: the rig is off", n)
+	}
+	if in := r.nextIn(); in > 10*time.Second {
+		t.Fatalf("covers left on the cable: the next round in %v", in)
+	}
+	if r.idle(time.Now()) {
+		t.Fatal("covers left on the cable: the app exits idle")
+	}
+	for i := 0; i < 30 && r.coversSaved() < 10; i++ {
+		r.check(t)
+	}
+	if n := r.coversSaved(); n != 10 {
+		t.Fatalf("%d of 10 after 30 rounds", n)
+	}
+	r.check(t) // nothing left of the 160 px set: the car's 512 px set, from the same covers
+	for i := 0; i < 30 && r.nextIn() < time.Minute; i++ {
+		r.check(t)
+	}
+	if in := r.nextIn(); in < slUnusedEvery-time.Minute {
+		t.Fatalf("nothing left: the next round in %v", in)
+	}
+	if !r.idle(time.Now()) {
+		t.Fatal("nothing left: the app stays")
+	}
+}
+
+// On battery the backlog keeps the quiet schedule and the idle exit.
+func TestCoverBacklogOnBatteryKeepsTheSchedule(t *testing.T) {
+	r := backlogRig(t, "out", "Discharging")
+	r.check(t)
+	if n := r.coversSaved(); n == 0 || n == 10 {
+		t.Fatalf("the first round saved %d of 10: the rig is off", n)
+	}
+	if in := r.nextIn(); in < slUnusedEvery-time.Minute {
+		t.Fatalf("on battery: the next round in %v", in)
+	}
+	if !r.idle(time.Now()) {
+		t.Fatal("on battery: the app stays")
+	}
+}
+
+// Without the state record (older firmware) a charging Q2 is on the cable.
+func TestCoverBacklogChargingWithoutTheRecord(t *testing.T) {
+	r := backlogRig(t, "", "Charging")
+	r.check(t)
+	if in := r.nextIn(); in > 10*time.Second || r.idle(time.Now()) {
+		t.Fatalf("charging: the next round in %v, idle %v", in, r.idle(time.Now()))
+	}
+}
+
+// A server that stops answering, or a round that saves nothing, ends the backlog: no tight loop,
+// and the idle exit is back.
+func TestCoverBacklogStopsWhenNothingIsSaved(t *testing.T) {
+	r := backlogRig(t, "in", "Full")
+	r.check(t)
+	if r.idle(time.Now()) {
+		t.Fatal("covers left on the cable: the app exits idle")
+	}
+	r.f.Mu.Lock()
+	r.f.Down = true
+	r.f.Mu.Unlock()
+	r.f.CloseClientConnections()
+	r.check(t)
+	if in := r.nextIn(); in < slRetryFirst-time.Second {
+		t.Fatalf("the server down: the next check in %v", in)
+	}
+	if !r.idle(time.Now()) {
+		t.Fatal("the server down: the app stays")
+	}
+	r.f.Mu.Lock()
+	r.f.Down = false
+	r.f.Covers = map[string][]byte{} // the server has none of the rest
+	r.f.Mu.Unlock()
+	r.sl.mu.Lock()
+	r.sl.up = 1 // answered again: the round, not the connection's checks
+	r.sl.mu.Unlock()
+	before := r.calls("getCoverArt")
+	r.check(t)
+	if r.calls("getCoverArt") == before {
+		t.Fatal("no round ran")
+	}
+	if in := r.nextIn(); in < slUnusedEvery-time.Minute {
+		t.Fatalf("a round that saved nothing: the next in %v", in)
+	}
+	if !r.idle(time.Now()) {
+		t.Fatal("a round that saved nothing: the app stays")
+	}
+}

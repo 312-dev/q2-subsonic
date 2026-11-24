@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,6 +46,11 @@ const (
 	slRetryFirst = 15 * time.Second
 	slRetryMost  = 2 * time.Minute
 	slRetryFor   = 10 * time.Minute
+	// A round of covers that saved some, ended without an error, on external power (onPower), is
+	// followed by the next slBacklogPause after it, and the app stays (slBacklog): a library of 6,174
+	// albums at about 88 covers a round every slUnusedEvery took 12 hours, and the app exited
+	// idleAfter into it (the owner's log, 2026-11-24).
+	slBacklogPause = 5 * time.Second
 )
 
 // slRetryIn is when a check comes after the fails'th failed one in a row, the first of them
@@ -65,12 +71,18 @@ func (d *daemon) resolvPath() string { return filepath.Join(d.tmp, "resolv.conf"
 // batteryStatus is where the Q2's charger says whether it charges (the AXP2101's battery supply).
 var batteryStatus = "/sys/class/power_supply/battery/status"
 
+// q2State is Q2 Muse's state record, one line such as "screen:on power:running cable:in battery:57
+// play:playing out:bluetooth". Its cable field is the firmware's own reading of the USB cable: a
+// charger's, a computer's or a car's power is "in"; an accessory the Q2 powers itself is not.
+var q2State = "/mnt/data/q2-state"
+
 // serverLib is the Server Library's state while the app runs.
 type serverLib struct {
 	on        atomic.Bool // the firmware takes a catalogue (its "catalogue" word)
 	busy      atomic.Bool // a connection's checks, a walk or a catalogue write runs: one at a time
 	checking  atomic.Bool // a connection's checks or a walk asks the server now: the state file's sync=check
 	streaming atomic.Bool // Streaming Songs, as q2-addon.library last said; always on without "libsource"
+	backlog   atomic.Bool // the last round of covers saved some, with no error, on external power
 
 	mu         sync.Mutex
 	up         int8      // the server answered (1), didn't (-1), not asked yet (0)
@@ -206,6 +218,7 @@ func (d *daemon) slTick() {
 func (d *daemon) slCheck() {
 	done, what := d.job("server library check", true), "pinged"
 	defer func() { done("%s", what) }()
+	d.sl.backlog.Store(false) // only a round of covers that saves some sets it again
 	d.sl.mu.Lock()
 	rewrite := d.sl.rewrite
 	d.sl.rewrite = false
@@ -246,10 +259,10 @@ func (d *daemon) slCheck() {
 	what = "a round of covers"
 }
 
-const (
-	slCoverPass = 30 * time.Second // a round of covers at most: the next check, a rewrite, wait no longer
-	slCoverIn   = 10 * time.Second // one cover's request
-)
+// slCoverPass is a round of covers at most: the next check, a rewrite, wait no longer.
+var slCoverPass = 30 * time.Second
+
+const slCoverIn = 10 * time.Second // one cover's request
 
 func (d *daemon) covers() catalogue.Covers {
 	return catalogue.Covers{Card: d.card, Dir: filepath.Join(d.dir, catalogue.CoversName)}
@@ -264,8 +277,9 @@ func (d *daemon) bigCovers() catalogue.Covers {
 // slCovers is a round of the catalogue's album covers (catalogue.Covers): while the app's network
 // is quiet (slQuiet) or the Q2 charges, and the server answers, the albums the folder lacks are
 // asked for, one at a time (each request holds the one network slot, fetchCover) and for
-// slCoverPass at most, through the network slot a sync or a stream takes first. What was saved stays, so the next round, a minute on, goes on from there.
-// A cover the server says it hasn't is noted and not asked again; a lost server ends the round,
+// slCoverPass at most, through the network slot a sync or a stream takes first. What was saved
+// stays, so the next round goes on from there: at the next check of the schedule (slTick), or, on
+// external power after a round that saved some with no error, slBacklogPause after it. A cover the server says it hasn't is noted and not asked again; a lost server ends the round,
 // and so does a sync starting or a song of the stream to fetch. The playlists' covers come first,
 // then the albums' in the Library's order. Once the 160 px set has every cover it can have (none
 // left out by its budget), the rounds fetch the car's 512 px set (bigCovers) the same way, within
@@ -375,6 +389,16 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 		len(pass.Todo)-saved-none, pass.Used()>>10, time.Since(start).Round(time.Millisecond))
 	if saved > 0 {
 		d.stWrote()
+	}
+	// on external power, a round that saved some is followed by the next soon after: with none left in
+	// this set, the next round takes the car's, or finds nothing and settles
+	if saved > 0 && lost == nil && onPower() {
+		d.sl.backlog.Store(true)
+		d.sl.mu.Lock()
+		if next := time.Now().Add(slBacklogPause); next.Before(d.sl.nextPing) {
+			d.sl.nextPing = next
+		}
+		d.sl.mu.Unlock()
 	}
 	if errors.Is(lost, catalogue.ErrCardFull) {
 		d.slSettle() // no room: asked again once the card or the albums change
@@ -526,6 +550,20 @@ func (d *daemon) slIdle() bool { return !d.runner.Busy() && !d.stream.active() }
 // (streamer.busy). A list playing what it already fetched, or a song played from the cache, is
 // quiet: covers are a few KB each and wait for the network slot syncs and streams take first.
 func (d *daemon) slQuiet() bool { return !d.runner.Busy() && !d.stream.busy() }
+
+// slBacklog is whether covers are still coming back to back (serverLib.backlog) and the Q2 is still
+// on external power: the app does not take the idle exit meanwhile.
+func (d *daemon) slBacklog() bool { return d.sl.backlog.Load() && onPower() && d.slActive() }
+
+// onPower is whether the Q2 runs on external power: the state record says cable:in, or the charger
+// charges or is full. The record comes first, as Charge Limit holds the charger off from 80% to 75%
+// with the cable in; firmware without the record has only the charger's word.
+func onPower() bool {
+	if b, err := os.ReadFile(q2State); err == nil && slices.Contains(strings.Fields(string(b)), "cable:in") {
+		return true
+	}
+	return charging()
+}
 
 func charging() bool {
 	b, _ := os.ReadFile(batteryStatus)

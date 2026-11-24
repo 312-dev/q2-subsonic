@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Song is one song the server has.
@@ -44,6 +45,7 @@ type Server struct {
 	Calls     map[string]int
 	Writes    []string          // "setRating s1 3", "star s1", "unstar s1", "createPlaylist p1 s1,s2", "updatePlaylist p1 name=x add=s3", "deletePlaylist p1"
 	Covers    map[string][]byte // getCoverArt's picture by id, or by "<id>@<size>" for that size alone; an id not here is error 70
+	CoverIn   time.Duration     // how long getCoverArt takes to answer
 }
 
 // New starts a TLS server with user u and password "pw".
@@ -219,6 +221,11 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		ok(map[string]any{})
 	case "getCoverArt":
+		if in := f.CoverIn; in > 0 { // the lock let go meanwhile, so a test can look
+			f.Mu.Unlock()
+			time.Sleep(in)
+			f.Mu.Lock()
+		}
 		b, have := f.Covers[q.Get("id")+"@"+q.Get("size")]
 		if !have {
 			b, have = f.Covers[q.Get("id")]

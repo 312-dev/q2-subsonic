@@ -31,7 +31,7 @@ import (
 
 const (
 	answerIn    = 8 * time.Second  // every Q2SPOT/1 reply within this (the firmware gives up at 15 s)
-	idleAfter   = 30 * time.Minute // exit 0 after this long with no request, sync or stream
+	idleAfter   = 30 * time.Minute // exit 0 after this long with no request, sync or stream (idle)
 	signinPort  = 8080             // or the next free one
 	previewTTL  = time.Minute      // a preview older than this is computed again when Sync is opened
 	pingEvery   = 30 * time.Second
@@ -816,15 +816,15 @@ func (d *daemon) qrLeft() {
 }
 
 // idle is whether the app may exit: no request for idleAfter (the end of a sync counts as one), no
-// sync, stream or Server Library check, no song that may still count as played or report on its
-// way, and no library request awaiting its answer, as the firmware works on that only while the
-// app runs (I15).
+// sync, stream or Server Library check, no covers coming back to back on external power
+// (slBacklog), no song that may still count as played or report on its way, and no library request
+// awaiting its answer, as the firmware works on that only while the app runs (I15).
 func (d *daemon) idle(now time.Time) bool {
 	d.mu.Lock()
 	last, lib := d.lastReq, d.lib != nil && !d.lib.done
 	d.mu.Unlock()
 	return now.Sub(last) >= idleAfter && !lib && !d.runner.Busy() && !d.stream.active() && !d.stream.plays.pending() &&
-		!d.sl.busy.Load()
+		!d.sl.busy.Load() && !d.slBacklog()
 }
 
 // close ends what the app runs before it exits; a sync paused here resumes at the next Sync.
