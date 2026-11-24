@@ -899,6 +899,10 @@ func (r *streamRun) fetch(ctx context.Context, sg subsonic.Song, j job) (err err
 		total = expect(sg, j.quality)
 	}
 	r.prog.gate = startGate(total, int64(sg.Duration)*1000)
+	r.prog.playBps, r.prog.rateAt, r.prog.rateHave, r.prog.slowSaid = 0, time.Time{}, 0, false
+	if total > 0 && sg.Duration > 0 {
+		r.prog.playBps = total / int64(sg.Duration)
+	}
 	s.pmu.Unlock()
 	defer func() { r.fetchSummary(sg.Title, err) }()
 	defer resp.Body.Close()
@@ -932,7 +936,7 @@ func (r *streamRun) fetch(ctx context.Context, sg subsonic.Song, j job) (err err
 	s.pmu.Lock()
 	r.prog.total = max(resp.ContentLength+from, 0)
 	s.pmu.Unlock()
-	n, err := io.Copy(io.MultiWriter(f, counter{r}), io.LimitReader(resp.Body, limit+1))
+	n, err := io.Copy(io.MultiWriter(cardWriter{f, r}, counter{r}), io.LimitReader(resp.Body, limit+1))
 	if err == nil {
 		err = syncer.SizeErr(n, resp.ContentLength, limit)
 	}

@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1083,5 +1086,46 @@ func TestMemNoteReadsTheQ2sAndTheAppsMemory(t *testing.T) {
 	got := memNote()
 	if !strings.Contains(got, "MemAvailable ") || !strings.Contains(got, "kB") || !strings.Contains(got, "the app's VmRSS ") {
 		t.Fatalf("memNote() = %q", got)
+	}
+}
+
+// A server check that gets no answer in its time while a download from the server gets bytes met
+// a slow server or path, not a lost one: the library stays up, the log says so, and the next check
+// comes at the first retry's wait.
+func TestACheckTimingOutWhileADownloadMovesIsSlowNotDown(t *testing.T) {
+	old := slPingIn
+	slPingIn = 300 * time.Millisecond
+	t.Cleanup(func() { slPingIn = old })
+	r := newCatRig(t, "playlist catalogue", nil)
+	r.check(t) // up
+	trickle := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		for i := 0; i < 40 && req.Context().Err() == nil; i++ {
+			w.Write(make([]byte, 1024))
+			w.(http.Flusher).Flush()
+			time.Sleep(25 * time.Millisecond)
+		}
+	}))
+	defer trickle.Close()
+	resp, err := r.client().Get(context.Background(), trickle.URL+"/rest/stream?id=s1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	go io.Copy(io.Discard, resp.Body)
+	r.f.Mu.Lock()
+	r.f.PingIn = time.Second
+	r.f.Mu.Unlock()
+	r.check(t)
+	r.sl.mu.Lock()
+	up, fails, next := r.sl.up, r.sl.fails, time.Until(r.sl.nextPing)
+	r.sl.mu.Unlock()
+	if up != 1 || fails != 0 {
+		t.Fatalf("up %d, %d failures: a slow answer was taken for a lost server", up, fails)
+	}
+	if next > slRetryFirst+time.Second {
+		t.Fatalf("the next check in %v; want about %v", next, slRetryFirst)
+	}
+	if b, _ := os.ReadFile(filepath.Join(r.dir, "log.txt")); !strings.Contains(string(b), "slow, not down") {
+		t.Fatalf("log.txt:\n%s", b)
 	}
 }

@@ -10,6 +10,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -246,6 +247,65 @@ type progress struct {
 	gate                  int64         // startGate's bytes, at which .stream is written at once (kick)
 	kick                  chan struct{}
 	stallSaid             bool // the wait now running was logged (stallLog)
+	// The arriving rate against the song's own (playBps: its bytes over its length), over windows
+	// of rateWindow from rateAt and rateHave; slowSaid while a slow one was said and not yet over.
+	playBps  int64
+	rateAt   time.Time
+	rateHave int64
+	slowSaid bool
+	// the card's longest write of the window, and all of them (cardWriter)
+	writeMax, writes time.Duration
+}
+
+// cardWriter is the song's file on the card, its writes timed into the run's progress: a song
+// arriving slowly says whether the card or the network held it (rateNote).
+type cardWriter struct {
+	f io.Writer
+	r *streamRun
+}
+
+func (w cardWriter) Write(b []byte) (int, error) {
+	t := time.Now()
+	n, err := w.f.Write(b)
+	d := time.Since(t)
+	w.r.s.pmu.Lock()
+	w.r.prog.writeMax = max(w.r.prog.writeMax, d)
+	w.r.prog.writes += d
+	w.r.s.pmu.Unlock()
+	return n, err
+}
+
+// rateWindow is the stretch a download's rate is measured over, against the song's own.
+var rateWindow = 10 * time.Second
+
+// rateNote is the line log.txt gets when a song's bytes come slower than it plays, over a whole
+// rateWindow, and once more when they come faster again; "" for neither. p is locked.
+func rateNote(p *progress, title string, now time.Time) string {
+	if p.playBps <= 0 {
+		return ""
+	}
+	if p.rateAt.IsZero() {
+		p.rateAt, p.rateHave = now, p.have
+		return ""
+	}
+	dt := now.Sub(p.rateAt)
+	if dt < rateWindow {
+		return ""
+	}
+	bps := (p.have - p.rateHave) * int64(time.Second) / int64(dt)
+	wmax, wall := p.writeMax, p.writes
+	p.rateAt, p.rateHave, p.writeMax, p.writes = now, p.have, 0, 0
+	switch {
+	case bps < p.playBps && !p.slowSaid:
+		p.slowSaid = true
+		return fmt.Sprintf("stream: %q: arriving at %d KB/s over %v, slower than the %d KB/s it plays at (%d of %d bytes); "+
+			"writing it to the card took %v of that, %v at most for one write", title, bps>>10, dt.Round(time.Second),
+			p.playBps>>10, p.have, p.total, wall.Round(time.Millisecond), wmax.Round(time.Millisecond))
+	case bps >= p.playBps && p.slowSaid:
+		p.slowSaid = false
+		return fmt.Sprintf("stream: %q: arriving at %d KB/s again, faster than it plays", title, bps>>10)
+	}
+	return ""
 }
 
 // startGate is the bytes of a song arriving in place the firmware starts it at (docs/server-library.md
@@ -362,7 +422,7 @@ func (c counter) Write(b []byte) (int, error) {
 	if len(b) == 0 {
 		return 0, nil
 	}
-	now, said := time.Now(), ""
+	now, said, note := time.Now(), "", ""
 	c.r.s.pmu.Lock()
 	p := &c.r.prog
 	title := ""
@@ -381,6 +441,7 @@ func (c counter) Write(b []byte) (int, error) {
 	before := p.have
 	p.have += int64(len(b))
 	p.movedAt = now
+	note = rateNote(p, title, now)
 	if p.kick != nil && (before == 0 || p.gate > 0 && before < p.gate && p.have >= p.gate) {
 		select {
 		case p.kick <- struct{}{}:
@@ -388,8 +449,10 @@ func (c counter) Write(b []byte) (int, error) {
 		}
 	}
 	c.r.s.pmu.Unlock()
-	if said != "" {
-		c.r.s.logf("%s", said)
+	for _, l := range []string{said, note} {
+		if l != "" {
+			c.r.s.logf("%s", l)
+		}
 	}
 	return len(b), nil
 }

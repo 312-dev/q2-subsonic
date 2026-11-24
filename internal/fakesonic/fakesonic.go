@@ -46,6 +46,7 @@ type Server struct {
 	Writes    []string          // "setRating s1 3", "star s1", "unstar s1", "createPlaylist p1 s1,s2", "updatePlaylist p1 name=x add=s3", "deletePlaylist p1"
 	Covers    map[string][]byte // getCoverArt's picture by id, or by "<id>@<size>" for that size alone; an id not here is error 70
 	CoverIn   time.Duration     // how long getCoverArt takes to answer
+	PingIn    time.Duration     // how long ping takes to answer, other requests served meanwhile
 }
 
 // New starts a TLS server with user u and password "pw".
@@ -83,6 +84,16 @@ func (s Song) wire() map[string]any {
 }
 
 func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
+	if path.Base(r.URL.Path) == "ping" {
+		f.Mu.Lock()
+		wait := f.PingIn
+		f.Mu.Unlock()
+		select {
+		case <-time.After(wait):
+		case <-r.Context().Done():
+			return
+		}
+	}
 	f.Mu.Lock()
 	defer f.Mu.Unlock()
 	op := path.Base(r.URL.Path)

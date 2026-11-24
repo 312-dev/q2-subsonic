@@ -37,10 +37,12 @@ type Creds struct {
 }
 
 type Client struct {
-	c    Creds
-	base *url.URL
-	home *home // the server's address on the home network, tried first there; nil without one
-	hc   *http.Client
+	c     Creds
+	base  *url.URL
+	home  *home         // the server's address on the home network, tried first there; nil without one
+	hc    *http.Client  // API calls and the server check
+	bulk  *http.Client  // Get's downloads (songs, covers): connections of their own (New)
+	moved *atomic.Int64 // when a download last got bytes (unix ns), shared by the client's copies
 	// Log, when set, receives one redacted line per request.
 	Log *applog.Log
 	// Seen, when set, is told how each API call and each Get ended: nil for an answer that served,
@@ -100,7 +102,17 @@ func New(c Creds, hc *http.Client) (*Client, error) {
 		}
 		return nil
 	}
-	return &Client{c: c, base: u, hc: &h}, nil
+	bulk := h // a download's own connections: an API call never waits behind a song on a slow path
+	if t, ok := h.Transport.(*http.Transport); ok {
+		bulk.Transport = t.Clone()
+	}
+	return &Client{c: c, base: u, hc: &h, bulk: &bulk, moved: new(atomic.Int64)}, nil
+}
+
+// DownloadMoved is whether a download (a song, a cover) got bytes since t: a server check that
+// timed out meanwhile met a slow server, not a lost one.
+func (c *Client) DownloadMoved(since time.Time) bool {
+	return c.moved != nil && c.moved.Load() >= since.UnixNano()
 }
 
 // homeRest is how long requests go to the main address after one to the home address failed.
@@ -191,6 +203,11 @@ const (
 // request to the home address that gets no answer is sent to the main address, which takes the
 // next minute's too.
 func (c *Client) do(parent context.Context, op, u string, from int64) (*http.Response, error) {
+	return c.doOn(c.hc, parent, op, u, from)
+}
+
+// doOn is do through hc: the API's client, or the downloads' (Get).
+func (c *Client) doOn(hc *http.Client, parent context.Context, op, u string, from int64) (*http.Response, error) {
 	ctx, cancel := context.WithCancel(parent)
 	tr := newReqTrace() // how far it got, for a failure's line (failWhy)
 	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, tr.hooks()), "GET", u, nil)
@@ -201,14 +218,14 @@ func (c *Client) do(parent context.Context, op, u string, from int64) (*http.Res
 	if from > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", from))
 	}
-	resp, err := c.hc.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		live := ctx.Err() == nil // not cancelled by the caller
 		cancel()
 		c.logf("GET %s -> %v [%s]", u, err, failWhy(err, tr))
 		if main, ok := c.offHome(u); ok && live {
 			c.home.rest.Store(time.Now().Add(homeRest).UnixNano())
-			return c.do(parent, op, main, from)
+			return c.doOn(hc, parent, op, main, from)
 		}
 		return nil, &APIError{Op: op, Msg: applog.Redact(err.Error()), kind: transportKind(err)}
 	}
@@ -218,6 +235,9 @@ func (c *Client) do(parent context.Context, op, u string, from int64) (*http.Res
 		idle = idleAfter
 	}
 	b := &idleBody{ReadCloser: resp.Body, op: op, idle: idle, cancel: cancel}
+	if hc == c.bulk {
+		b.moved = c.moved
+	}
 	b.t = time.AfterFunc(idle, func() { b.fired.Store(true); cancel() })
 	b.t.Stop()
 	resp.Body = b
@@ -244,12 +264,16 @@ type idleBody struct {
 	t      *time.Timer
 	fired  atomic.Bool
 	cancel context.CancelFunc
+	moved  *atomic.Int64 // a download's: its client's last bytes (Client.DownloadMoved)
 }
 
 func (b *idleBody) Read(p []byte) (int, error) {
 	b.t.Reset(b.idle)
 	n, err := b.ReadCloser.Read(p)
 	b.t.Stop()
+	if n > 0 && b.moved != nil {
+		b.moved.Store(time.Now().UnixNano())
+	}
 	if err != nil && b.fired.Load() {
 		err = &APIError{Op: b.op, Msg: fmt.Sprintf("no data for %v", b.idle), kind: ErrStalled}
 	}
@@ -830,7 +854,11 @@ func (c *Client) Get(ctx context.Context, u string, from int64) (_ *http.Respons
 	if pu, err := url.Parse(u); err == nil && pu.Path != "" {
 		op = path.Base(pu.Path)
 	}
-	resp, err := c.do(ctx, op, u, from)
+	hc := c.bulk
+	if hc == nil {
+		hc = c.hc
+	}
+	resp, err := c.doOn(hc, ctx, op, u, from)
 	if err != nil {
 		return nil, err
 	}

@@ -328,3 +328,26 @@ func TestRetryTriesALostServerAgainNow(t *testing.T) {
 		t.Error("the retry file was left")
 	}
 }
+
+// A song whose bytes come slower than it plays says so once, with both rates, and once more when
+// they come faster again; a song arriving fast says nothing.
+func TestASongArrivingSlowerThanItPlaysIsSaid(t *testing.T) {
+	p := &progress{playBps: 100 << 10, total: 30 << 20}
+	t0 := time.Now()
+	at := func(s int, have int64) string {
+		p.have = have
+		return rateNote(p, "Song", t0.Add(time.Duration(s)*time.Second))
+	}
+	if at(0, 0) != "" || at(10, 2<<20) != "" { // 200 KB/s
+		t.Fatal("a fast song was said slow")
+	}
+	if got := at(20, 2<<20+400<<10); !strings.Contains(got, "arriving at 40 KB/s over 10s, slower than the 100 KB/s it plays at (") || !strings.Contains(got, "writing it to the card took") {
+		t.Fatalf("slow: %q", got)
+	}
+	if at(30, 2<<20+800<<10) != "" {
+		t.Fatal("said twice")
+	}
+	if got := at(40, 5<<20); !strings.Contains(got, "faster than it plays") {
+		t.Fatalf("again: %q", got)
+	}
+}

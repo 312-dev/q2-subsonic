@@ -37,7 +37,6 @@ const (
 	slEvery       = time.Minute      // the server is pinged this often while the Server Library runs (slActive)
 	slUnused      = 5 * time.Minute  // no request and nothing streaming this long: the ping is every slUnusedEvery
 	slUnusedEvery = 10 * time.Minute // a ping is a request and a line in log.txt on the card
-	slPingIn      = 10 * time.Second
 	// After a check the server did not answer, the next comes sooner than the schedule above: at
 	// slRetryFirst, doubling to slRetryMost, for slRetryFor from the first failure; then on the
 	// schedule again. A ping that fails just after the Wi-Fi joins a network (DNS or the route not
@@ -52,6 +51,9 @@ const (
 	// idleAfter into it (the owner's log, 2026-11-24).
 	slBacklogPause = 5 * time.Second
 )
+
+// slPingIn is how long the server check waits for the ping's answer (a var for tests).
+var slPingIn = 10 * time.Second
 
 // slRetryIn is when a check comes after the fails'th failed one in a row, the first of them
 // downFor ago, with every the schedule's wait: slRetryFirst doubling to slRetryMost while the
@@ -236,8 +238,21 @@ func (d *daemon) slCheck() {
 	asked := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), slPingIn)
 	err := cl.Ping(ctx)
+	late := ctx.Err() == context.DeadlineExceeded
 	cancel()
 	answered := time.Now()
+	// no answer in time while a download from the server got bytes: the server or the path is slow
+	// (a song arriving slowly holds it), not gone; marking it down would toast it lost and stop
+	// the library's rows for a server that is sending
+	if err != nil && late && cl.DownloadMoved(asked) {
+		d.sl.mu.Lock()
+		if next := time.Now().Add(slRetryFirst); next.Before(d.sl.nextPing) {
+			d.sl.nextPing = next
+		}
+		d.sl.mu.Unlock()
+		d.log.Printf("server library: no answer in %v while a download got bytes: slow, not down; the next check in %v", slPingIn, slRetryFirst)
+		return
+	}
 	was := d.slServer(err)
 	d.slRetry(err)
 	switch {
