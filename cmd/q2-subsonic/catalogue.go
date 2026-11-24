@@ -241,10 +241,11 @@ func (d *daemon) slCheck() {
 	switch {
 	case err != nil:
 		// a failed check far past the ping's own limit says where the time went: before the ping
-		// (the client, behind d.mu), the ping, or recording the answer (the state file, the log)
+		// (the client, behind d.mu), the ping, or recording the answer (the state file, the log);
+		// and the memory then, as the whole Q2 stalls when it runs short
 		if took := time.Since(start); took > slPingIn+2*time.Second {
-			what = fmt.Sprintf("pinged (%v before the ping, %v the ping, %v after it)", asked.Sub(start).Round(time.Millisecond),
-				answered.Sub(asked).Round(time.Millisecond), time.Since(answered).Round(time.Millisecond))
+			what = fmt.Sprintf("pinged (%v before the ping, %v the ping, %v after it; %s)", asked.Sub(start).Round(time.Millisecond),
+				answered.Sub(asked).Round(time.Millisecond), time.Since(answered).Round(time.Millisecond), memNote())
 		}
 		return
 	case was != 1, d.caps.Playlists && catalogue.PlsPending(d.dir):
@@ -1028,4 +1029,26 @@ func (d *daemon) slSignOut() {
 	d.sl.mu.Lock()
 	d.sl.up, d.sl.due, d.sl.resync, d.sl.songs, d.sl.walked, d.sl.errMsg = 0, false, false, 0, time.Time{}, ""
 	d.sl.mu.Unlock()
+}
+
+// memNote is the memory the Q2 has left and the app's own, for a log line: "MemAvailable 75000 kB,
+// the app's VmRSS 21000 kB", a field that can't be read left out.
+func memNote() string {
+	var parts []string
+	for _, f := range []struct{ path, key, say string }{
+		{"/proc/meminfo", "MemAvailable:", "MemAvailable"},
+		{"/proc/self/status", "VmRSS:", "the app's VmRSS"},
+	} {
+		b, err := os.ReadFile(f.path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if v, ok := strings.CutPrefix(line, f.key); ok {
+				parts = append(parts, f.say+" "+strings.TrimSpace(v))
+				break
+			}
+		}
+	}
+	return strings.Join(parts, ", ")
 }

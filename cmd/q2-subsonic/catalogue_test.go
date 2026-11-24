@@ -1077,3 +1077,11 @@ func TestCoverBacklogStopsWhenNothingIsSaved(t *testing.T) {
 		t.Fatal("a round that saved nothing: the app stays")
 	}
 }
+
+// A server check that ran far past its ping's limit says what memory the Q2 had: both fields read.
+func TestMemNoteReadsTheQ2sAndTheAppsMemory(t *testing.T) {
+	got := memNote()
+	if !strings.Contains(got, "MemAvailable ") || !strings.Contains(got, "kB") || !strings.Contains(got, "the app's VmRSS ") {
+		t.Fatalf("memNote() = %q", got)
+	}
+}
