@@ -67,7 +67,7 @@ type signin struct {
 	now       func() time.Time                                         // default time.Now
 	tick      time.Duration                                            // how often the 10 min limit is checked; default 1 s
 	newClient func(subsonic.Creds) (*subsonic.Client, error)           // default: the embedded roots
-	lookup    func(ctx context.Context, host string) ([]net.IP, error) // default net.DefaultResolver's
+	lookup    func(ctx context.Context, host string) ([]net.IP, error) // default tlsroots.LookupIP's
 	addrs     func() []net.Addr                                        // the Q2's interfaces' addresses (home.go); nil is localAddrs
 
 	mu       sync.Mutex
@@ -405,7 +405,12 @@ func (s *signin) tailnet(ctx context.Context, host string) bool {
 	look := s.lookup
 	if look == nil {
 		look = func(ctx context.Context, h string) ([]net.IP, error) {
-			return net.DefaultResolver.LookupIP(ctx, "ip", h)
+			addrs, err := tlsroots.LookupIP(ctx, h) // the resolver file's servers, as every request's
+			ips := make([]net.IP, len(addrs))
+			for i, a := range addrs {
+				ips[i] = a.AsSlice()
+			}
+			return ips, err
 		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)

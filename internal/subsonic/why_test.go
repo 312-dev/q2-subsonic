@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/andsuor/q2-subsonic/internal/applog"
+	"github.com/andsuor/q2-subsonic/internal/tlsroots"
 )
 
 // A ping that times out says how far it got: a pooled connection that the server no longer answers
@@ -64,7 +65,8 @@ func TestFailWhyNamesTheStep(t *testing.T) {
 		err  error
 		want string
 	}{
-		{dns("[::1]:53", "dial udp [::1]:53: socket: address family not supported by protocol", false, false), "dns: no name server"},
+		{dns("/etc/resolv.conf", tlsroots.ErrNoNameServer.Error(), false, false), "dns: the resolver file lists no name server"},
+		{dns("[::1]:53", "dial udp [::1]:53: socket: address family not supported by protocol", false, false), "dns: the resolver in use has no name server, the resolver file lists"},
 		{dns("1.0.0.1:53", "dial udp 1.0.0.1:53: connect: network is unreachable", false, false), "dns: no route"},
 		{dns("10.16.0.1:53", "read udp 10.16.0.4:45325->10.16.0.1:53: i/o timeout", true, false), "dns: the name server didn't answer"},
 		{dns("10.16.0.1:53", "server misbehaving", false, false), "dns: the name server failed the name"},

@@ -11,10 +11,12 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/andsuor/q2-subsonic/internal/tlsroots"
 )
 
 // A request that fails says in its log line why, in one phrase, and how far it got: whether the
-// Wi-Fi had a name server, whether the name, the connect, the TLS handshake or the answer failed,
+// resolver file listed a name server, whether the name, the connect, the TLS handshake or the answer failed,
 // and on a reused connection how long that had been idle. "context deadline exceeded" alone can't
 // tell a dead pooled connection from a network gone.
 
@@ -66,7 +68,7 @@ func (t *reqTrace) where() string {
 	return fmt.Sprintf("%s: %s after %s", conn, t.phase, took)
 }
 
-// failWhy is a failed request's reason in a few words: the Wi-Fi without a name server, the name,
+// failWhy is a failed request's reason in a few words: no name server to ask, the name,
 // the connect, the TLS handshake, a connection gone silent, or no answer in time with how far the
 // request got (t).
 func failWhy(err error, t *reqTrace) string {
@@ -74,8 +76,10 @@ func failWhy(err error, t *reqTrace) string {
 	switch {
 	case errors.As(err, &de):
 		switch {
+		case de.Err == tlsroots.ErrNoNameServer.Error():
+			return "dns: the resolver file lists no name server (no lease yet, or the file is being rewritten)"
 		case de.Server == "[::1]:53" || de.Server == "127.0.0.1:53":
-			return "dns: no name server (the Wi-Fi has no lease)"
+			return fmt.Sprintf("dns: the resolver in use has no name server, the resolver file lists %d", len(tlsroots.NameServers()))
 		case errors.Is(err, syscall.ENETUNREACH) || strings.Contains(de.Err, "network is unreachable"):
 			return "dns: no route to the name server (the Wi-Fi has no network)"
 		case de.IsTimeout:

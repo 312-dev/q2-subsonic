@@ -140,6 +140,7 @@ func fetchDate(u string) (time.Time, error) {
 // used: it is empty for an IP address, which would skip the name check.
 func dateTransport(roots *x509.CertPool, host string) *http.Transport {
 	return &http.Transport{
+		DialContext:       (&dialer{d: net.Dialer{Timeout: 5 * time.Second}}).DialContext, // the resolver file's servers
 		DisableKeepAlives: true,
 		TLSClientConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,

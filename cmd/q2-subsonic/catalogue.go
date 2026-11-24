@@ -94,6 +94,7 @@ type serverLib struct {
 	fails      int       // checks in a row the server did not answer (slRetryIn)
 	downAt     time.Time // the first of them
 	resolvAt   time.Time // resolv.conf's time when last looked at (zero: not there): a change is a lease
+	resolvLen  int64     // and its size: udhcpc's appends can keep the truncation's time (coarse clock)
 	resolvSeen bool      // resolvAt was looked at
 	note       string    // how far a walk has come, for Settings
 	errMsg     string    // the last failure that was not a lost server (a refused sign-in, say)
@@ -180,17 +181,18 @@ func (d *daemon) slTick() {
 	d.mu.Unlock()
 	quiet := time.Since(last) >= slUnused && !d.stream.active()
 	var resolvAt time.Time // a stat a tick, of tmpfs; the watch on /tmp (pressNames) makes it at once
+	resolvLen := int64(-1)
 	if st, err := os.Stat(d.resolvPath()); err == nil {
-		resolvAt = st.ModTime()
+		resolvAt, resolvLen = st.ModTime(), st.Size()
 	}
 	d.sl.mu.Lock()
 	if d.sl.quiet && !quiet { // the Q2 used again (a request, a stream): the server asked at once
 		d.sl.nextPing = time.Time{}
 	}
-	// a lease (resolv.conf rewritten, or there at last) while the server is down: a network joined,
-	// the server asked at once and the retries started over
-	joined := d.sl.resolvSeen && !resolvAt.Equal(d.sl.resolvAt) && d.sl.up == -1
-	d.sl.resolvAt, d.sl.resolvSeen = resolvAt, true
+	// a lease (resolv.conf rewritten, or there at last: its time or its size moved) while the server
+	// is down: a network joined, the server asked at once and the retries started over
+	joined := d.sl.resolvSeen && (!resolvAt.Equal(d.sl.resolvAt) || resolvLen != d.sl.resolvLen) && d.sl.up == -1
+	d.sl.resolvAt, d.sl.resolvLen, d.sl.resolvSeen = resolvAt, resolvLen, true
 	if joined {
 		d.sl.nextPing, d.sl.fails, d.sl.downAt = time.Time{}, 0, time.Time{}
 	}

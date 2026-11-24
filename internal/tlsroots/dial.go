@@ -14,9 +14,9 @@ import (
 
 // A server's name is looked up for every new connection, and the network the Q2 joins may answer
 // that badly while the server itself can be reached: a venue's resolver that fails the name
-// ("server misbehaving") or drops the query (5 s per try, two tries), and, just after a lease,
-// Go's resolver still holding the resolver file from before it (read again at most every 5 s), with
-// no server in it. So the dialler remembers, per name, the address it last connected to, and
+// ("server misbehaving") or drops the query, or a resolver file with no server in it while a
+// lease is written. The name servers come from the resolver file at each lookup (LookupIP, with
+// dnsTry for each), and the dialler remembers, per name, the address it last connected to, and
 // dials that address when the name doesn't resolve, or hasn't resolved after slowLookup. TLS still
 // checks the certificate against the name (the transport handshakes with the request's host), so
 // an old address can only reach the server it reached before.
@@ -25,10 +25,8 @@ import (
 // above the 23 to 380 ms the Q2's log shows for an answer, far below the resolver's 5 s per try.
 var slowLookup = time.Second
 
-// lookupHost resolves a name (injectable for tests).
-var lookupHost = func(ctx context.Context, host string) ([]netip.Addr, error) {
-	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-}
+// lookupHost resolves a name (injectable for tests): LookupIP, with the resolver file's servers.
+var lookupHost = LookupIP
 
 // logf, when set (SetLog), is told each time a remembered address stands in for a name.
 var logf atomic.Pointer[func(format string, a ...any)]

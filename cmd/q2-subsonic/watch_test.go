@@ -273,3 +273,36 @@ func TestANewLeaseChecksAtOnce(t *testing.T) {
 		t.Fatal("resolv.conf is not watched: a lease waits for the next tick")
 	}
 }
+
+// udhcpc's script truncates the resolver file, then appends its servers, and on the Q2 those writes
+// can share one mtime: the check the truncation woke finds no server, and the appends are a change
+// all the same, asked about at once.
+func TestALeaseWrittenUnderOneMtimeIsSeenWhole(t *testing.T) {
+	r := newCatRig(t, "playlist catalogue", nil)
+	resolv := filepath.Join(r.tmp, "resolv.conf")
+	os.WriteFile(resolv, []byte("nameserver 10.0.0.1\n"), 0o644)
+	r.check(t)
+	r.f.Mu.Lock()
+	r.f.Down = true
+	r.f.Mu.Unlock()
+	r.check(t)
+	r.check(t) // two failures: the next in 30 s
+	at := time.Now().Add(2 * time.Second)
+	os.WriteFile(resolv, nil, 0o644) // the truncation: a lease, no server yet
+	os.Chtimes(resolv, at, at)
+	r.slTick()
+	r.bg.Wait()
+	r.f.Mu.Lock()
+	r.f.Down = false
+	r.f.Mu.Unlock()
+	os.WriteFile(resolv, []byte("nameserver 10.0.0.2 # wlan0\n"), 0o644) // the appends, the same tick
+	os.Chtimes(resolv, at, at)
+	r.slTick()
+	r.bg.Wait()
+	r.sl.mu.Lock()
+	up := r.sl.up
+	r.sl.mu.Unlock()
+	if up != 1 {
+		t.Fatalf("the lease's servers under the truncation's mtime: up %d; want asked at once", up)
+	}
+}
