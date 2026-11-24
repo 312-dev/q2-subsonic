@@ -249,3 +249,42 @@ func TestASlowRadioDoesNotReplaceALaterList(t *testing.T) {
 		t.Fatalf("the list the user started was replaced: %v", q)
 	}
 }
+
+// A radio's start holds the stream's lock and takes the radio's (streamer.started), so the tick that
+// reads the radio's state must not hold the radio's lock while it takes the stream's, or each waits
+// for the other for good. Many starts, with ticks running beside them, are all answered.
+func TestARadioStartAndTheTickNeverWaitForEachOther(t *testing.T) {
+	n := &nav{albums: 4, songsPer: 6}
+	d := newTestDaemon(t, n, "playlist radio", true)
+	done, stop := make(chan struct{}), make(chan struct{})
+	for range 4 { // ticks, as the daemon's and the requests' come
+		go func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					d.radioTick()
+				}
+			}
+		}()
+	}
+	go func() {
+		defer close(done)
+		defer close(stop)
+		for seq := 1; seq <= 300; seq++ {
+			d.ask(strconv.Itoa(seq) + " start " + d.streamed("al3.2"))
+			for end := time.Now().Add(20 * time.Second); !strings.HasPrefix(d.stateKey("radioack"), strconv.Itoa(seq)+" "); {
+				if time.Now().After(end) {
+					return // the select below says so
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(60 * time.Second):
+		t.Fatal("the radio's start and the tick each wait for the other's lock")
+	}
+}

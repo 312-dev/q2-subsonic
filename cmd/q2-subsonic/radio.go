@@ -235,8 +235,15 @@ func (d *daemon) radioTick() {
 	if !d.caps.Radio {
 		return
 	}
+	// the stream's lock is never taken inside the radio's: a radio's start holds the stream's and
+	// takes the radio's (streamer.started). A radio started meanwhile has another gen, and is not
+	// ended by this look at the run before it.
 	d.radio.mu.Lock()
-	ended := d.radio.on && d.radio.running && !d.stream.active() // its run ended: no more songs come
+	gen := d.radio.gen
+	d.radio.mu.Unlock()
+	active := d.stream.active()
+	d.radio.mu.Lock()
+	ended := d.radio.gen == gen && d.radio.on && d.radio.running && !active // its run ended: no more songs come
 	d.radio.mu.Unlock()
 	if ended {
 		d.radioEnd()
