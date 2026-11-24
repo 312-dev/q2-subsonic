@@ -249,14 +249,15 @@ type progress struct {
 }
 
 // startGate is the bytes of a song arriving in place the firmware starts it at (docs/server-library.md
-// "Starting before the end", addon.c m3u_songs and stream_state.c stream_startable): 8 s of it, at
-// least 256 KB, never past its total; 0 when its total or length is unknown (no early write then).
+// "Starting before the end", addon.c m3u_songs and stream_state.c stream_startable): 3 s of it
+// (START_MS), at least 256 KB (START_MIN), never past its total; 0 when its total or length is unknown
+// (no early write then).
 func startGate(total, lengthMs int64) int64 {
 	if total <= 0 || lengthMs <= 0 {
 		return 0
 	}
 	perS := total / max(lengthMs/1000, 1) // stream_state.c start_bytes' arithmetic, to the byte
-	return min(total, max(256<<10, perS*8))
+	return min(total, max(256<<10, perS*3))
 }
 
 // stallLog is how long a download goes without a byte before log.txt says so: once while it waits,

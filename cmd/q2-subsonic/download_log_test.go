@@ -77,14 +77,14 @@ func TestStreamLineAtOnceAndAtTheStartGate(t *testing.T) {
 	first := make(chan struct{})
 	e.src.body = func(string) (io.Reader, int64) {
 		<-first
-		// the gate's bytes and 8 KB more at once, the last 2 KB a moment later: the line at the gate is
+		// past the gate's bytes at once, the last 2 KB a moment later: the line at the gate is
 		// written as the gate is crossed, whatever it has by then, and the bytes after it wait for a tick
 		return io.MultiReader(strings.NewReader(strings.Repeat("x", 328<<10)), &later{d: 300 * time.Millisecond,
 			r: strings.NewReader(strings.Repeat("x", 2<<10))}, held{hold}), int64(total)
 	}
 	list := songs(1, "flac")
 	list[0].Duration, list[0].Size = 10, int64(total)
-	if gate := startGate(int64(total), 10000); gate != 320<<10 {
+	if gate := startGate(int64(total), 10000); gate != 256<<10 {
 		t.Fatalf("gate %d", gate)
 	}
 	e.s.start(list, 0)
@@ -100,7 +100,7 @@ func TestStreamLineAtOnceAndAtTheStartGate(t *testing.T) {
 			return false
 		}
 		_, err := fmt.Sscanf(l[1], "get\t%d\t", &have)
-		return err == nil && have >= 320<<10 // the gate, or past it by what came with it
+		return err == nil && have >= 256<<10 // the gate, or past it by what came with it
 	})
 	if d := time.Since(at); d > 500*time.Millisecond {
 		t.Fatalf("the gate's line %v after the bytes", d)
@@ -192,5 +192,23 @@ func TestNoStallBeforeTheFirstByte(t *testing.T) {
 	close(answer)
 	if len(l) != 2 || !strings.HasPrefix(l[1], "get\t0\t") {
 		t.Fatalf("waiting for the server: %q", l)
+	}
+}
+
+// startGate is the firmware's start to the byte: stream_state.c start_bytes, START_MS (3 s of the song at its
+// average rate) and START_MIN (256 KB), never past its total. A gate past the firmware's left the line that
+// opens it to the next statusEvery tick, so a song whose start had come waited up to that long to be queued
+// while Now Playing's amount stood (the owner's V1UYi report: "hanging at like < 1MB until the song starts").
+func TestStartGateIsTheFirmwaresStart(t *testing.T) {
+	for _, c := range []struct{ total, ms, want int64 }{
+		{19683998, 180000, 109355 * 3}, // a 180 s FLAC at 875 kb/s: 3 s of it
+		{25401482, 229000, 110923 * 3}, // the owner's "Leather and Lace"
+		{4 << 20, 180000, 256 << 10},   // 3 s of it is under START_MIN
+		{200 << 10, 10000, 200 << 10},  // never past the song
+		{1 << 20, 0, 0},                // no length: no early write
+	} {
+		if got := startGate(c.total, c.ms); got != c.want {
+			t.Errorf("startGate(%d, %d) = %d, the firmware starts it at %d", c.total, c.ms, got, c.want)
+		}
 	}
 }
