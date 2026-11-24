@@ -41,6 +41,14 @@ func main() {
 	debug.SetMemoryLimit(48 << 20)
 	nice := lowerPriority()
 	q2.SetupLog("q2-subsonic")
+	// One copy at a time (single.go), before anything is read or written: a second one would take
+	// the first's socket and write the same files.
+	if ok, err := lockOne(filepath.Join(*tmp, "q2-subsonic.lock")); err != nil {
+		log.Printf("lock: %v; running without it", err)
+	} else if !ok {
+		log.Print("start ", versionBuild(), ": another copy runs already, exiting")
+		return
+	}
 	q2.Card = *card
 	log.Print("start ", versionBuild())
 	d := newDaemon(*dir, *card, *tmp)

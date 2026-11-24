@@ -90,6 +90,8 @@ Discover (Shuffle All, the server's Recently Added, Recently Played, Most Played
 
 Only `Subsonic/`, the playlist `.m3u` files it wrote and `.subsonic/`, Settings > Storage's sizes included. An older `Navidrome/` folder is moved to `Subsonic/` once, at start-up. Nothing else on the card is read or changed.
 
+One copy runs at a time: the launcher (`.subsonic/run`) holds a lock while its loop runs, so a second start, even one in the same instant, ends at once, and the app holds a lock of its own (`/tmp/q2-subsonic.lock`), so a copy started any other way logs `another copy runs already, exiting` and ends before it reads or writes anything.
+
 ## Library and firmware extensions
 
 Newer Q2 Pod firmware offers extensions to card apps. Without them everything still works, a little less smoothly:
