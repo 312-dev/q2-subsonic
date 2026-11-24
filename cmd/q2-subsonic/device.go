@@ -22,7 +22,9 @@ import (
 
 // The Q2's Navidrome page over Q2SPOT/1 (q2-pod patch/addon.c draws it). A list row's URI is the op it
 // opens and its Context the argument; an action row sends URI with Context and toasts the reply's
-// message; a held Play/Pause sends the row's Position ("toggle") with its Context ("kind:id").
+// message; a held Play/Pause sends the row's Position ("toggle") with its Context ("kind:id"). A
+// song row's Position is "hold" on firmware with "holdmenu": its own menu (holdmenu.go), which a
+// held Centre or finger asks for too.
 // Albums and Artists take a key before the cursor: an order (newest, artist, year) or "i:<index group>".
 // Item pages take "kind:id" too, since one Context serves both press and hold. A song row's Context
 // is "song:<id> <list key> <index>": toggle reads the first field, play the rest. The list key is
@@ -296,6 +298,14 @@ func (d *daemon) reply(req q2spot.Request) q2spot.Reply {
 		return d.quality(req.Arg(0))
 	case "play":
 		return d.play(ctx, cl, req.Arg(0))
+	case "hold", "next", "last": // a song row's menu, on firmware with "holdmenu" (holdmenu.go)
+		if !d.caps.HoldMenu {
+			break
+		}
+		if req.Op == "hold" {
+			return d.holdMenu(req.Arg(0))
+		}
+		return d.enqueue(ctx, cl, req.Op, req.Arg(0))
 	case "account":
 		return d.account(cl)
 	case "signout":

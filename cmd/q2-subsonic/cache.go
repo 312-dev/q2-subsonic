@@ -154,8 +154,12 @@ func (s *streamer) cacheFiles() []cacheFile {
 	return out
 }
 
-// held reports whether f is protected: a song of the set, or its download. s.kmu is held.
-func (s *streamer) held(f cacheFile) bool { return s.keep[strings.TrimSuffix(f.path, ".part")] }
+// held reports whether f is protected: a song of the set or one Play Next or Play Last named, or
+// its download. s.kmu is held.
+func (s *streamer) held(f cacheFile) bool {
+	p := strings.TrimSuffix(f.path, ".part")
+	return s.keep[p] || slices.Contains(s.queued, p)
+}
 
 // drop deletes f unless it is protected, tested now, under the set's lock, and reports whether it
 // went. The lock is held a delete long, not a walk: a new list's protect never waits for a clear.

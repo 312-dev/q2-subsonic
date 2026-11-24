@@ -394,6 +394,10 @@ type daemon struct {
 	diag               diagState     // Settings > Diagnostics' events (diagnostics.go)
 	diagErrAt          time.Time     // the sync stop Diagnostics recorded last
 
+	qmu      sync.Mutex // .queue's lines (holdmenu.go)
+	queueSeq int64      // the seq of .queue's latest line
+	queued   []string   // its lines, the latest queueKeep
+
 	bg sync.WaitGroup // the work replies leave running (ping, preview, play, sign-out's stops); tests wait for it
 }
 

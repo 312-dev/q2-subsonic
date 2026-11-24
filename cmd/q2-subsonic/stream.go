@@ -81,6 +81,7 @@ type streamer struct {
 	cmu      sync.Mutex              // one walk at a time
 	kmu      sync.Mutex              // keep, and each delete
 	keep     map[string]bool         // the protected songs (protect)
+	queued   []string                // the songs Play Next and Play Last named last (holdQueued), protected too
 	used     atomic.Int64            // bytes kept, as last walked and fetched since; for Settings, and when to walk
 	counted  atomic.Bool             // a walk has set used
 
@@ -276,6 +277,7 @@ type job struct {
 	away    bool      // the server was lost at it: tried on until it answers or the list is left
 	failed  bool      // it ended the run (.stream's fail)
 	partial bool      // in place (grow), cut mid-song: its bytes kept for the player, the next try from their end
+	whole   bool      // never in place: named only once whole (Play Next and Play Last, holdmenu.go)
 }
 
 // synced reports whether e's file can play from the card: it is there, and no sync is about to
@@ -865,7 +867,7 @@ func (r *streamRun) fetch(ctx context.Context, sg subsonic.Song, j job) (err err
 		return err
 	}
 	defer s.net.Release()
-	part, grow := j.path+".part", s.grows()
+	part, grow := j.path+".part", s.grows() && !j.whole
 	if grow {
 		part = j.path
 	}

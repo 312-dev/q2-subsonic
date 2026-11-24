@@ -45,6 +45,10 @@ type Caps struct {
 	// has come. "grow": its player plays a song while it arrives, so the app writes it in place
 	// rather than as a .part (q2-coda's docs/server-library.md#download-ahead-and-the-streaming-state).
 	Ahead, Grow bool
+	// "holdmenu": a row whose hold op is "hold" has it sent when Centre, a finger or Play/Pause is
+	// held on it, and the reply's action rows are its menu; the firmware queues a song the app
+	// names in /tmp/q2-<id>.queue for Play Next or Play Last (q2-coda's docs/internals.md#card-apps).
+	HoldMenu bool
 }
 
 // ReadCaps reads the firmware capabilities from path. A missing file gives all false.
@@ -104,6 +108,8 @@ func ReadCaps(path string) Caps {
 			caps.Ahead = true
 		case "grow":
 			caps.Grow = true
+		case "holdmenu":
+			caps.HoldMenu = true
 		}
 	}
 	return caps

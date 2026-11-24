@@ -37,6 +37,7 @@ type view struct {
 	quality map[string]string // chosen item key -> its quality
 	libQ    string            // Entire Library's quality, "" while it is off
 	gone    map[string]bool   // chosen item keys the server no longer has, as last previewed
+	menu    bool              // a song row's hold op is "hold", its own menu (firmware with "holdmenu")
 }
 
 func (d *daemon) view() view {
@@ -46,7 +47,7 @@ func (d *daemon) view() view {
 	res, artists, gone := maps.Clone(d.resolved), maps.Clone(d.artistAlbums), maps.Clone(d.gone)
 	d.mu.Unlock()
 	v := view{sel: sel, m: m, res: res, artists: artists, gone: gone, keyed: map[string][]string{}, albumOn: map[string]map[string]bool{},
-		pending: map[string]bool{}, quality: map[string]string{}}
+		pending: map[string]bool{}, quality: map[string]string{}, menu: d.caps.HoldMenu}
 	for _, it := range sel.Items {
 		q := cmp.Or(it.Quality, "original")
 		v.quality[selection.Key(it.Kind, it.ID)] = q
@@ -172,8 +173,12 @@ func (v view) item(kind selection.Kind, id, name, own string, total int) q2spot.
 }
 
 func (v view) song(s subsonic.Song, listKey string, i int) q2spot.Row {
+	hold := "toggle"
+	if v.menu {
+		hold = "hold"
+	}
 	return q2spot.Row{Kind: "action", URI: "play", Title: s.Title, Subtitle: join(s.Artist, v.songStatus(s)),
-		Context: fmt.Sprintf("song:%s %s %d", s.ID, listKey, i), Position: "toggle"}
+		Context: fmt.Sprintf("song:%s %s %d", s.ID, listKey, i), Position: hold}
 }
 
 // songStatus is a song row's sync status: Available offline, Waiting to sync, or "".
