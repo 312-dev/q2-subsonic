@@ -422,6 +422,7 @@ func newDaemon(dir, card, tmp string) *daemon {
 		free: freeBytes, answerIn: answerIn, signinPort: signinPort, browseTTL: browseTTL,
 		lastReq: time.Now(), resolved: map[string][]subsonic.Song{}, artistAlbums: map[string][]subsonic.Album{}}
 	d.reach = &reach{keys: d.state, now: time.Now}
+	tlsroots.SetLog(lg.Printf) // a remembered address standing in for the server's name
 	d.reach.wentDown = func(err error) { d.diagAdd(failure("Server out of reach", "", err)) }
 	d.signin = &signin{dir: dir, state: d.state, addrs: func() []net.Addr {
 		if d.addrs != nil {

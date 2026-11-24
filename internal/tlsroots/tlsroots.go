@@ -186,9 +186,10 @@ func newTransport(roots *x509.CertPool, timeout time.Duration) *http.Transport {
 	// connection that has read nothing for h2PingAfter is pinged, and closed when no answer comes
 	// in h2PingWait: one that dies without a reset (the Wi-Fi joining another network takes its
 	// address) is otherwise kept, as a request timed out on it resets only its stream, and every
-	// request goes to it until the kernel gives the connection up, about 15 minutes on.
+	// request goes to it until the kernel gives the connection up, about 15 minutes on. A name
+	// that fails to resolve, or resolves slowly, is dialled at the address it last had (dialer).
 	t := &http.Transport{
-		DialContext:           (&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext:           (&dialer{d: net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}}).DialContext,
 		TLSHandshakeTimeout:   timeout,
 		ResponseHeaderTimeout: timeout,
 		ForceAttemptHTTP2:     true,

@@ -28,6 +28,7 @@ Things to know:
 - The password crosses your local Wi-Fi unencrypted, once, from the phone to the Q2. Do it on a network you trust.
 - The server must be `https://`, unless it is on your home network: `http://` works only for a private address (`10.x`, `172.16` to `172.31`, `192.168.x`, typed as the address, not a name) and is refused anywhere else. Certificates are verified.
 - The password is stored on the card, in `.subsonic/credentials`. If your server offers OpenSubsonic API keys (`apiKeyAuthentication`), enter a key from its settings as the password instead: then only the key is stored. exFAT has no file permissions, so anyone with the card can read it. **Make a server user just for the Q2, not an admin.** If the card is lost, delete that user on the server and the card is worthless.
+- When the Wi-Fi's name server fails the server's name, or hasn't answered within a second, the app connects to the address it last reached the server at, and checks the certificate against the name as always; `log.txt` says `dial: the server's name: <why>; dialling its last address`. The address is kept in memory only, so the app's first connection after it starts needs the name.
 - **Settings → Account** shows the server, the home address when there is one, and the user.
 - **Settings → Account → Sign Out** removes the stored login and empties the Stream Cache, but for a list that is still playing. Your synced music stays on the card.
 
