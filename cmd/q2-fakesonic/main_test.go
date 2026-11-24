@@ -144,3 +144,32 @@ func TestWithAudioEverySongIsThatFile(t *testing.T) {
 		t.Fatalf("%q", b)
 	}
 }
+
+func TestARateSendsASongAtThatPaceUntilItIsLifted(t *testing.T) {
+	k := newFake(2, 4, 64<<10, "Title ", "seam", "seam")
+	s, c := httptest.NewServer(k), httptest.NewServer(k.control())
+	t.Cleanup(func() { s.Close(); c.Close() })
+	if r, _ := http.PostForm(c.URL+"/rate", url.Values{"id": {"s1"}, "bps": {"131072"}}); r.StatusCode != 200 {
+		t.Fatalf("rate: %d", r.StatusCode)
+	}
+	t0 := time.Now()
+	if _, b := get(t, signed(s.URL, "stream", url.Values{"id": {"s1"}}), ""); len(b) != 64<<10 {
+		t.Fatalf("%d bytes", len(b))
+	}
+	// four 16 KB writes at 128 KB/s: the last leaves 375 ms after the first
+	if d := time.Since(t0); d < 350*time.Millisecond {
+		t.Fatalf("64 KB at 128 KB/s in %v", d)
+	}
+	if _, b := get(t, signed(s.URL, "stream", url.Values{"id": {"s2"}}), ""); len(b) != 64<<10 {
+		t.Fatalf("s2: %d bytes", len(b))
+	}
+	http.PostForm(c.URL+"/rate", url.Values{"id": {"s1"}, "bps": {"0"}})
+	t0 = time.Now()
+	get(t, signed(s.URL, "stream", url.Values{"id": {"s1"}}), "")
+	if d := time.Since(t0); d > 200*time.Millisecond {
+		t.Fatalf("bps=0 still paced: %v", d)
+	}
+	if r, _ := http.PostForm(c.URL+"/rate", url.Values{"id": {"s1"}}); r.StatusCode != 400 {
+		t.Fatalf("rate without bps: %d", r.StatusCode)
+	}
+}

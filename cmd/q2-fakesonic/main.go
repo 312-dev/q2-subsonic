@@ -9,6 +9,8 @@
 //	POST /cut?id=s5&at=N&hold=MS   the next request of s5 sends up to byte N, then nothing for MS ms,
 //	                               then closes: a download cut mid-song
 //	POST /delay?op=OP&ms=MS        every OP call answered MS ms late (getSimilarSongs2: a slow Radio)
+//	POST /rate?id=s5&bps=N         s5's bytes sent at about N bytes a second, every request from now
+//	                               on, in 16 KB writes (bps=0: at full speed again): a slow server
 //
 // Every album has a cover (getCoverArt with its album id), a grey JPEG of the size asked.
 //
@@ -57,6 +59,7 @@ type fake struct {
 	hits   []Hit
 	cuts   map[string]cut
 	delays map[string]time.Duration
+	rates  map[string]int64 // bytes a second per song id (/rate)
 	albums int
 	per    int
 	audio  []byte // every song's bytes when set (-audio), else body's pattern
@@ -224,6 +227,7 @@ func (k *fake) media(w http.ResponseWriter, r *http.Request, op, id string) {
 	k.hits = append(k.hits, Hit{Op: op, ID: id, From: from, Status: status})
 	c, cutting := k.cuts[id]
 	delete(k.cuts, id)
+	bps := k.rates[id]
 	k.mu.Unlock()
 	if !have {
 		k.fail(w, 70, "Song not found")
@@ -240,7 +244,12 @@ func (k *fake) media(w http.ResponseWriter, r *http.Request, op, id string) {
 	if cutting && c.at >= from {
 		end = min(end, c.at)
 	}
-	buf := make([]byte, 0, 32<<10)
+	chunk := 32 << 10
+	if bps > 0 {
+		chunk = 16 << 10
+	}
+	began, sent := time.Now(), int64(0)
+	buf := make([]byte, 0, chunk)
 	for off := from; off < end; off++ {
 		if k.audio != nil {
 			buf = append(buf, k.audio[off])
@@ -248,9 +257,16 @@ func (k *fake) media(w http.ResponseWriter, r *http.Request, op, id string) {
 			buf = append(buf, body(id, off))
 		}
 		if len(buf) == cap(buf) || off == end-1 {
+			if bps > 0 { // paced: this chunk leaves when the rate allows it
+				time.Sleep(time.Until(began.Add(time.Duration(sent * int64(time.Second) / bps))))
+			}
 			if _, err := w.Write(buf); err != nil {
 				return
 			}
+			if bps > 0 {
+				w.(http.Flusher).Flush()
+			}
+			sent += int64(len(buf))
 			buf = buf[:0]
 		}
 	}
@@ -295,13 +311,23 @@ func (k *fake) control() http.Handler {
 		k.delays[r.FormValue("op")] = time.Duration(ms) * time.Millisecond
 		k.mu.Unlock()
 	})
+	m.HandleFunc("/rate", func(w http.ResponseWriter, r *http.Request) {
+		bps, err := strconv.ParseInt(r.FormValue("bps"), 10, 64)
+		if err != nil || bps < 0 || r.FormValue("id") == "" {
+			http.Error(w, "rate needs id and bps", 400)
+			return
+		}
+		k.mu.Lock()
+		k.rates[r.FormValue("id")] = bps
+		k.mu.Unlock()
+	})
 	return m
 }
 
 func newFake(n, per int, size int64, title, user, pwd string) *fake {
 	f := fakesonic.Unstarted()
 	f.User, f.Pwd, f.Songs, f.Count, f.LastScan = user, pwd, library(n, per, size, title), int64(n), "2026-11-20T12:00:00Z"
-	return &fake{f: f, cuts: map[string]cut{}, delays: map[string]time.Duration{}, albums: (n + per - 1) / per, per: per}
+	return &fake{f: f, cuts: map[string]cut{}, delays: map[string]time.Duration{}, rates: map[string]int64{}, albums: (n + per - 1) / per, per: per}
 }
 
 func main() {
