@@ -7,8 +7,16 @@
 # it. A failed run's stderr (a panic's trace) and exit code are kept in /tmp/q2-subsonic.crash, which
 # the next start puts in .subsonic/log.txt. Q2 Pod stops it with a TERM to the loop's pid in
 # /tmp/q2-subsonic.
+#
+# One copy at a time: a launcher takes the lock on $pid.loop (flock, on descriptor 9) before it looks
+# for a running app, and the loop keeps that descriptor, so the lock lasts as long as the loop. A
+# second launcher, even one started in the same instant (Q2 Pod can start the app twice at a boot),
+# finds it taken and exits at once, touching nothing. The app takes a lock of its own too
+# (/tmp/q2-subsonic.lock), for a copy started any other way.
 pid=/tmp/q2-subsonic
 if [ "$1" != --loop ]; then
+    exec 9>>$pid.loop
+    flock -n 9 || exit 0
     [ -f $pid ] && kill -0 "$(cat $pid)" 2>/dev/null && exit 0
     dir=$(cd "$(dirname "$0")" && pwd)
     cp -f "$dir/q2-subsonic" /tmp/q2-subsonic.bin && chmod 755 /tmp/q2-subsonic.bin || exit 1
@@ -22,7 +30,7 @@ dir=$2
     # A TERM keeps a crash for the next start: a crash loop stopped from the Q2 is when it matters.
     # An app that hasn't ended 2 s after its TERM is killed, so the loop is gone within the 3 s Q2
     # Pod waits (addon.c's AWAY_MS).
-    trap '[ -n "$child" ] && kill -TERM $child 2>/dev/null && { (sleep 2; kill -KILL $child) 2>/dev/null & w=$!; wait $child; kill $w 2>/dev/null; }; rm -f $pid /tmp/q2-subsonic.bin /tmp/q2-subsonic.run /tmp/q2-subsonic.err; rm -rf /tmp/q2-subsonic.art; exit 0' TERM INT
+    trap '[ -n "$child" ] && kill -TERM $child 2>/dev/null && { (sleep 2; kill -KILL $child) 2>/dev/null & w=$!; wait $child; kill $w 2>/dev/null; }; rm -f $pid $pid.loop /tmp/q2-subsonic.lock /tmp/q2-subsonic.bin /tmp/q2-subsonic.run /tmp/q2-subsonic.err; rm -rf /tmp/q2-subsonic.art; exit 0' TERM INT
     delay=5
     while :; do
         /tmp/q2-subsonic.bin -dir "$dir" 2>/tmp/q2-subsonic.err &
@@ -35,7 +43,7 @@ dir=$2
         wait $! # not sleep alone: a TERM interrupts a wait, but waits for a foreground sleep
         [ $delay -lt 60 ] && delay=$((delay * 2))
     done
-    rm -f $pid /tmp/q2-subsonic.bin /tmp/q2-subsonic.run /tmp/q2-subsonic.err /tmp/q2-subsonic.crash
+    rm -f $pid $pid.loop /tmp/q2-subsonic.lock /tmp/q2-subsonic.bin /tmp/q2-subsonic.run /tmp/q2-subsonic.err /tmp/q2-subsonic.crash
     rm -rf /tmp/q2-subsonic.art # the covers: an app that was killed left them
 ) </dev/null >/dev/null 2>&1 &
 echo $! > $pid

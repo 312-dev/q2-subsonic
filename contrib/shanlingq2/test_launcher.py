@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run launcher.sh (the card's run) on the host with a fake app: after a failure it restarts, waiting
-5 s and doubling; an exit of 0 ends the loop and tidies /tmp; a second run while it runs starts
-nothing; a TERM to the loop's pid stops the app and tidies,
+5 s and doubling; an exit of 0 ends the loop and tidies /tmp; a second run while it runs, or two
+started together, start one app; a TERM to the loop's pid stops the app and tidies,
 and an app that ignores it is killed 2 s later, the covers it left in /tmp removed.
 Usage: test_launcher.py"""
 import os
@@ -71,6 +71,19 @@ with tempfile.TemporaryDirectory(prefix='q2-launcher-') as d:
     os.kill(int((t/f'q2-{app}').read_text()), signal.SIGTERM)
     wait(lambda: not list(t.iterdir()), 'the TERM to tidy')
     assert lines(tmp/'terms') == ['term'] and not lines(tmp/'sleeps'), (lines(tmp/'terms'), lines(tmp/'sleeps'))
+for _ in range(5):  # two launchers at once (a boot's two starts): one app, one loop
+    with tempfile.TemporaryDirectory(prefix='q2-launcher-') as d:
+        tmp = pathlib.Path(d)
+        card, t, env = rig(tmp, 'echo start >> "$Q2_TEST/starts"\n'
+                                'trap \'exit 0\' TERM\n'
+                                'while :; do /bin/sleep 0.05; done\n')
+        both = [subprocess.Popen(['/bin/sh', str(card/'run')], env=env) for _ in range(2)]
+        assert [p.wait(timeout=10) for p in both] == [0, 0]
+        wait(lambda: lines(tmp/'starts'), 'the app')
+        time.sleep(0.5)
+        assert lines(tmp/'starts') == ['start'], lines(tmp/'starts')
+        os.kill(int((t/f'q2-{app}').read_text()), signal.SIGTERM)
+        wait(lambda: not list(t.iterdir()), 'the TERM to tidy')
 with tempfile.TemporaryDirectory(prefix='q2-launcher-') as d:  # stopped in a crash loop: the trace stays
     tmp = pathlib.Path(d)
     card, t, env = rig(tmp, 'echo start >> "$Q2_TEST/starts"\n'
