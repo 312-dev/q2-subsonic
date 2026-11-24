@@ -37,7 +37,30 @@ const (
 	slUnused      = 5 * time.Minute  // no request and nothing streaming this long: the ping is every slUnusedEvery
 	slUnusedEvery = 10 * time.Minute // a ping is a request and a line in log.txt on the card
 	slPingIn      = 10 * time.Second
+	// After a check the server did not answer, the next comes sooner than the schedule above: at
+	// slRetryFirst, doubling to slRetryMost, for slRetryFor from the first failure; then on the
+	// schedule again. A ping that fails just after the Wi-Fi joins a network (DNS or the route not
+	// up yet) left the library down for the 10 minutes of the quiet schedule while the server answered
+	// (the owner's, 2026-11-24); a server out of reach for hours costs 8 pings more than the schedule.
+	slRetryFirst = 15 * time.Second
+	slRetryMost  = 2 * time.Minute
+	slRetryFor   = 10 * time.Minute
 )
+
+// slRetryIn is when a check comes after the fails'th failed one in a row, the first of them
+// downFor ago, with every the schedule's wait: slRetryFirst doubling to slRetryMost while the
+// outage is younger than slRetryFor, never later than every; every after.
+func slRetryIn(fails int, downFor, every time.Duration) time.Duration {
+	if fails <= 0 || downFor >= slRetryFor {
+		return every
+	}
+	in := slRetryFirst << min(fails-1, 8)
+	return min(in, slRetryMost, every)
+}
+
+// resolvPath is the resolver file udhcpc rewrites at each lease (/etc/resolv.conf on the Q2 is a link
+// to it): a new network, an address renewed, or the Wi-Fi back.
+func (d *daemon) resolvPath() string { return filepath.Join(d.tmp, "resolv.conf") }
 
 // batteryStatus is where the Q2's charger says whether it charges (the AXP2101's battery supply).
 var batteryStatus = "/sys/class/power_supply/battery/status"
@@ -49,20 +72,24 @@ type serverLib struct {
 	checking  atomic.Bool // a connection's checks or a walk asks the server now: the state file's sync=check
 	streaming atomic.Bool // Streaming Songs, as q2-addon.library last said; always on without "libsource"
 
-	mu       sync.Mutex
-	up       int8      // the server answered (1), didn't (-1), not asked yet (0)
-	nextPing time.Time // when the server is asked next
-	quiet    bool      // the ping went at slUnusedEvery: nothing used the app for slUnused
-	due      bool      // the server's hint changed: a walk waits for the Q2 to be idle or charging
-	resync   bool      // Resync Library was pressed: the next check walks whatever the hint says
-	rewrite  bool      // Streaming Songs is on again: the next check writes the catalogue first
-	note     string    // how far a walk has come, for Settings
-	errMsg   string    // the last failure that was not a lost server (a refused sign-in, say)
-	songs    int       // songs of the last walk
-	walked   time.Time // when it ended
-	catplay  string    // the .catplay last answered (or there at start-up)
-	settled  string    // coversKey when a round of covers last found nothing it could fetch
-	planned  int       // rounds of covers that read the store and the folders (for tests)
+	mu         sync.Mutex
+	up         int8      // the server answered (1), didn't (-1), not asked yet (0)
+	nextPing   time.Time // when the server is asked next
+	quiet      bool      // the ping went at slUnusedEvery: nothing used the app for slUnused
+	due        bool      // the server's hint changed: a walk waits for the Q2 to be idle or charging
+	resync     bool      // Resync Library was pressed: the next check walks whatever the hint says
+	rewrite    bool      // Streaming Songs is on again: the next check writes the catalogue first
+	fails      int       // checks in a row the server did not answer (slRetryIn)
+	downAt     time.Time // the first of them
+	resolvAt   time.Time // resolv.conf's time when last looked at (zero: not there): a change is a lease
+	resolvSeen bool      // resolvAt was looked at
+	note       string    // how far a walk has come, for Settings
+	errMsg     string    // the last failure that was not a lost server (a refused sign-in, say)
+	songs      int       // songs of the last walk
+	walked     time.Time // when it ended
+	catplay    string    // the .catplay last answered (or there at start-up)
+	settled    string    // coversKey when a round of covers last found nothing it could fetch
+	planned    int       // rounds of covers that read the store and the folders (for tests)
 }
 
 func (d *daemon) slInit() {
@@ -140,9 +167,20 @@ func (d *daemon) slTick() {
 	last := d.lastReq
 	d.mu.Unlock()
 	quiet := time.Since(last) >= slUnused && !d.stream.active()
+	var resolvAt time.Time // a stat a tick, of tmpfs; the watch on /tmp (pressNames) makes it at once
+	if st, err := os.Stat(d.resolvPath()); err == nil {
+		resolvAt = st.ModTime()
+	}
 	d.sl.mu.Lock()
 	if d.sl.quiet && !quiet { // the Q2 used again (a request, a stream): the server asked at once
 		d.sl.nextPing = time.Time{}
+	}
+	// a lease (resolv.conf rewritten, or there at last) while the server is down: a network joined,
+	// the server asked at once and the retries started over
+	joined := d.sl.resolvSeen && !resolvAt.Equal(d.sl.resolvAt) && d.sl.up == -1
+	d.sl.resolvAt, d.sl.resolvSeen = resolvAt, true
+	if joined {
+		d.sl.nextPing, d.sl.fails, d.sl.downAt = time.Time{}, 0, time.Time{}
 	}
 	if time.Now().Before(d.sl.nextPing) || d.sl.busy.Load() {
 		d.sl.mu.Unlock()
@@ -154,6 +192,9 @@ func (d *daemon) slTick() {
 	}
 	d.sl.nextPing = time.Now().Add(every)
 	d.sl.mu.Unlock()
+	if joined {
+		d.log.Printf("server library: a new Wi-Fi lease with the server down: checking it now")
+	}
 	if d.sl.busy.CompareAndSwap(false, true) {
 		d.spawn(func() { defer d.sl.busy.Store(false); d.slCheck() })
 	}
@@ -180,6 +221,7 @@ func (d *daemon) slCheck() {
 	err := cl.Ping(ctx)
 	cancel()
 	was := d.slServer(err)
+	d.slRetry(err)
 	switch {
 	case err != nil:
 		return
@@ -437,6 +479,36 @@ func (d *daemon) slServer(err error) (was int8) {
 		d.state.setServer(map[int8]string{1: "up", -1: "down"}[up])
 	}
 	return was
+}
+
+// slRetry sets the next check after one whose ping found no server (slRetryIn), and says so in
+// log.txt; an answer ends the run of failures.
+func (d *daemon) slRetry(err error) {
+	d.sl.mu.Lock()
+	fails := d.sl.fails
+	if !subsonic.ConnectionLost(err) {
+		d.sl.fails, d.sl.downAt = 0, time.Time{}
+		d.sl.mu.Unlock()
+		if fails > 0 {
+			d.log.Printf("server library: the server answers again after %d failed checks", fails)
+		}
+		return
+	}
+	if d.sl.fails++; d.sl.fails == 1 {
+		d.sl.downAt = time.Now()
+	}
+	fails = d.sl.fails
+	every := slEvery
+	if d.sl.quiet {
+		every = slUnusedEvery
+	}
+	down := time.Since(d.sl.downAt)
+	in := slRetryIn(fails, down, every)
+	if next := time.Now().Add(in); next.Before(d.sl.nextPing) {
+		d.sl.nextPing = next
+	}
+	d.sl.mu.Unlock()
+	d.log.Printf("server library: no answer (%d in a row, for %s): the next check in %s", fails, down.Round(time.Second), in)
 }
 
 // slPinged is the streamer's ping after a song failed: the state file follows it at once.
