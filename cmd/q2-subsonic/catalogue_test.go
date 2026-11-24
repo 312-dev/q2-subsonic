@@ -887,3 +887,50 @@ func TestBigCoversAtTheBudget(t *testing.T) {
 		t.Fatalf("asked for %d covers there was no room for", n)
 	}
 }
+
+// The playlists' covers come before the albums': a few dozen on the Library's Playlists page, which
+// after thousands of albums' came last and, with the folder at its budget, never (the owner's card,
+// 2026-11-24: 32 playlists, no pl- file). Here the folder has room for one more cover, and an album
+// (al9) and a playlist both lack one: the playlist's is fetched.
+func TestPlaylistCoversComeFirst(t *testing.T) {
+	r := newCatRig(t, "catalogue", fakesonic.Library(30)) // al0 to al9
+	r.f.Mu.Lock()
+	r.f.Playlists = []fakesonic.Playlist{{ID: "p1", Name: "Mix", Changed: "t1", CoverArt: "pl-p1_5", SIDs: []string{"s1"}}}
+	r.f.Covers = map[string][]byte{"pl-p1_5": testJPEG(t, 160)}
+	for i := range 10 {
+		r.f.Covers[fmt.Sprintf("al%d@160", i)] = testJPEG(t, 160)
+	}
+	r.f.Mu.Unlock()
+	batteryStatus = filepath.Join(r.tmp, "battery")
+	t.Cleanup(func() { batteryStatus = "/sys/class/power_supply/battery/status" })
+	os.WriteFile(batteryStatus, []byte("Charging\n"), 0o644)
+	cv := r.covers()
+	os.MkdirAll(cv.Dir, 0o755)
+	var fs syscall.Statfs_t
+	if err := syscall.Statfs(cv.Dir, &fs); err != nil {
+		t.Fatal(err)
+	}
+	unit := int64(fs.Bsize)
+	each := catalogue.CoverBudget / 10 / unit * unit
+	for i := range 9 { // nine albums' covers there, room for one more of their size
+		f, err := os.Create(cv.Path(fmt.Sprintf("al%d", i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Truncate(each) // sparse: only the size counts
+		f.Close()
+	}
+	r.check(t) // the first copy
+	r.check(t) // the covers' round
+	if _, err := os.Stat(cv.Path("pl-p1")); err != nil {
+		_, album := os.Stat(cv.Path("al9"))
+		t.Fatalf("the playlist's cover not fetched (al9's there: %v): %v", album == nil, err)
+	}
+	// and al9's, with no room, is said in log.txt, with the numbers
+	b, _ := os.ReadFile(filepath.Join(r.dir, "log.txt"))
+	want := fmt.Sprintf("covers (160 px): no room in the budget for 1 more: budget %d MiB, %d KiB clusters, 1 to fetch",
+		catalogue.CoverBudget>>20, unit>>10)
+	if !strings.Contains(string(b), want) {
+		t.Fatalf("log.txt has no %q:\n%s", want, b)
+	}
+}

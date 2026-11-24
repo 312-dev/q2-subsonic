@@ -224,8 +224,10 @@ func (d *daemon) bigCovers() catalogue.Covers {
 // asked for, one at a time (each request holds the one network slot, fetchCover) and for
 // slCoverPass at most, through the network slot a sync or a stream takes first. What was saved stays, so the next round, a minute on, goes on from there.
 // A cover the server says it hasn't is noted and not asked again; a lost server ends the round,
-// and so does a sync starting or a song of the stream to fetch. Once the 160 px set has nothing
-// left to fetch, the rounds fetch the car's 512 px set (bigCovers) the same way. Once neither has
+// and so does a sync starting or a song of the stream to fetch. The playlists' covers come first,
+// then the albums' in the Library's order. Once the 160 px set has every cover it can have (none
+// left out by its budget), the rounds fetch the car's 512 px set (bigCovers) the same way, within
+// a budget of its own: neither set's covers count against the other's. Once neither has
 // anything it can fetch (all there, noted, or no room), the rounds do nothing until coversKey
 // changes.
 func (d *daemon) slCovers(cl *subsonic.Client) {
@@ -242,13 +244,15 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 		return
 	}
 	b := catalogue.Build{Card: d.card, App: appID, Account: d.acct(), Synced: d.syncedPaths(), Local: d.stream.copies()}
-	albums, err := catalogue.Albums(d.store(), b)
+	list, err := catalogue.Albums(d.store(), b)
 	if err != nil {
 		d.slFail("covers", err)
 		return
 	}
-	pls, _ := d.playlistsFile().Load(d.acct()) // the playlists' covers after the albums'
-	albums = append(albums, catalogue.PlaylistCovers(pls)...)
+	// the playlists' covers first: a few dozen, on a page of their own the Library opens at, where
+	// after thousands of albums' they came last and, with the budget full, never (2026-11-24)
+	pls, _ := d.playlistsFile().Load(d.acct())
+	albums := append(catalogue.PlaylistCovers(pls), list...)
 	art := map[string]string{} // a playlist's file name: the coverArt id the server knows it by
 	for _, a := range albums {
 		if a.Art != "" {
@@ -257,9 +261,13 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 	}
 	cv := d.covers()
 	pass, err := cv.Plan(albums)
-	if err == nil && len(pass.Todo) == 0 { // the Q2's own all there: the car's larger ones
+	if err == nil && len(pass.Todo) == 0 && pass.Stopped == 0 { // the Q2's own all there: the car's larger ones
 		cv = d.bigCovers()
 		pass, err = cv.Plan(albums)
+	}
+	if err == nil && pass.Stopped > 0 { // never a silent ceiling: what the budget leaves out, once a round
+		d.log.Printf("server library: covers (%d px): no room in the budget for %d more: budget %d MiB, "+
+			"%d KiB clusters, %d to fetch this round", cv.Side(), pass.Stopped, pass.Budget>>20, pass.Unit>>10, len(pass.Todo))
 	}
 	if err != nil || len(pass.Todo) == 0 {
 		if err != nil {

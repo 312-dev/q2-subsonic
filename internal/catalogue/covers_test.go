@@ -2,6 +2,7 @@ package catalogue
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -136,5 +137,72 @@ func TestCoverOpen(t *testing.T) {
 	}
 	if _, err := (Covers{Card: card, Dir: filepath.Join(t.TempDir(), "covers")}).Open(); err == nil {
 		t.Fatal("a folder outside the card")
+	}
+}
+
+// The owner's card (2026-11-24): exFAT with 128 KiB clusters, 119 GB with 116 GB free, and a catalogue of 6,174
+// albums. Each cover takes a whole cluster, so a fixed 256 MiB budget held 2,048 of them and planned nothing
+// for the other 4,126, round after round. The budget is room for every album planned.
+func TestCoverPlanHasRoomForEveryAlbumOnACardOfBigClusters(t *testing.T) {
+	card := t.TempDir()
+	const unit = 128 << 10
+	space := func() (int64, int64, int64) { return unit, 116 << 30, 119 << 30 }
+	albums := make([]Album, 6174)
+	for i := range albums {
+		albums[i] = Album{ID: fmt.Sprintf("al%d", i)}
+	}
+	for _, c := range []Covers{
+		{Card: card, Dir: filepath.Join(card, ".subsonic", CoversName), Space: space},
+		{Card: card, Dir: filepath.Join(card, ".subsonic", CoversName, BigName), Px: BigPx, Body: BigBody, Space: space},
+	} {
+		p, err := c.Plan(albums)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(p.Todo) != len(albums) || p.Stopped != 0 {
+			t.Fatalf("%s: %d of %d albums planned, %d left out by a budget of %d MiB", c.Dir, len(p.Todo), len(albums),
+				p.Stopped, p.Budget>>20)
+		}
+		if p.Budget > (119<<30)/CoverShare {
+			t.Fatalf("budget %d MiB past the card's share", p.Budget>>20)
+		}
+		// and a cover saved at the end of the plan fits
+		room := p.Budget - int64(len(albums)-1)*unit
+		if room < unit {
+			t.Fatalf("budget %d MiB has no room for the last album", p.Budget>>20)
+		}
+	}
+}
+
+// A small card keeps a bound: its covers' budget is at most its size over CoverShare (but never under
+// CoverBudget), the plan says how many albums that leaves out, and a nearly full card writes none (CoverFloor).
+func TestCoverBudgetOnASmallOrNearlyFullCard(t *testing.T) {
+	card := t.TempDir()
+	const unit = 128 << 10
+	albums := make([]Album, 6174)
+	for i := range albums {
+		albums[i] = Album{ID: fmt.Sprintf("al%d", i)}
+	}
+	small := Covers{Card: card, Dir: filepath.Join(card, ".subsonic", CoversName),
+		Space: func() (int64, int64, int64) { return unit, 6 << 30, 8 << 30 }}
+	p, err := small.Plan(albums)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Budget != CoverBudget || len(p.Todo) != CoverBudget/unit || p.Stopped != len(albums)-CoverBudget/unit {
+		t.Fatalf("an 8 GB card: budget %d MiB, %d planned, %d left out", p.Budget>>20, len(p.Todo), p.Stopped)
+	}
+	mid := small
+	mid.Space = func() (int64, int64, int64) { return unit, 10 << 30, 16 << 30 }
+	if p, _ = mid.Plan(albums); p.Budget != (16<<30)/CoverShare || p.Stopped != len(albums)-int(p.Budget/unit) {
+		t.Fatalf("a 16 GB card: budget %d MiB, %d left out", p.Budget>>20, p.Stopped)
+	}
+	full := small
+	full.Space = func() (int64, int64, int64) { return unit, CoverFloor + unit/2, 119 << 30 }
+	if p, _ = full.Plan(albums); len(p.Todo) != len(albums) {
+		t.Fatalf("%d planned", len(p.Todo))
+	}
+	if err := p.Save("al0", []byte("jpeg")); !errors.Is(err, ErrCardFull) {
+		t.Fatalf("a cover written with the card at its floor: %v", err)
 	}
 }

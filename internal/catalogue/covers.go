@@ -19,24 +19,30 @@ import (
 // the album id in a server row's path, and shows the placeholder while there is none; so a cover is
 // fetched whenever there is time, and the catalogue never waits for one.
 //
-// The folder is bounded: its files, each counted in whole clusters of the card, stay within
-// Budget, and none is written while the card has less than CoverFloor free. An album the server has
-// no cover for is noted in covers/.none and not asked again until Sign Out; a cover whose album
+// The folder is bounded: its files, each counted in whole clusters of the card, stay within its
+// budget, and none is written while the card has less than CoverFloor free. The budget is room for
+// every album planned at its largest cover (MaxBody, in the card's clusters), at least CoverBudget
+// and at most the card's size over CoverShare: a card with 128 KiB clusters spends 128 KiB on a
+// 20 KB cover, so a fixed 256 MiB would hold 2,048 albums of a library of 6,174 (the owner's,
+// 2026-11-24). Plan says how many albums the budget leaves out (CoverPass.Stopped). An album the
+// server has no cover for is noted in covers/.none and not asked again until Sign Out; a cover whose album
 // leaves the catalogue is deleted (Plan). A playlist's cover is kept with the coverArt id it was
 // fetched by (covers/.art), as Navidrome names each new collage anew: a new id fetches it again,
 // and a playlist noted without one is asked again under its new id.
 //
 // The same albums' covers at BigPx are a second Covers, Dir covers/512 (BigName), with its own
 // budget and notes: the car remote sends them when the phone asks for more than CoverPx, as the
-// 160 px ones look soft on a car's screen. They are fetched once the 160 px set has nothing left
-// to fetch, and the Q2 itself never draws them (its rows decode a cover whole on its UI thread).
+// 160 px ones look soft on a car's screen. They are fetched once the 160 px set has every cover
+// it can have (none left to fetch, none left out by its budget), and the Q2 itself never draws them (its rows decode a cover whole on its UI thread).
 //
 // A cover the car asks for before a round reaches it is fetched at once and saved through Open, in
-// either folder, within the same budget and notes.
+// either folder, within that folder's budget (room for one more cover than it holds) and notes.
 type Covers struct {
 	Card, Dir string
-	Budget    int64 // 0: CoverBudget
+	Budget    int64 // a fixed budget (tests); 0: from the albums planned, the card and its clusters
 	Px, Body  int   // a cover's side and the server's bytes at most; 0: CoverPx, CoverBody
+	// Space is the card's cluster, free bytes and size (tests); nil: statfs of Dir.
+	Space func() (unit, free, total int64)
 }
 
 // Side is the largest a cover of c is, either way.
@@ -59,7 +65,8 @@ const (
 	CoversName  = "covers"
 	CoverPx     = 160        // Cover Flow's texture side (q2-coda patch/coverflow.h ART_SIZE); rows and grids are smaller
 	CoverBody   = 64 << 10   // a cover's bytes at most as the server sends it
-	CoverBudget = 256 << 20  // of the card for the folder, in clusters
+	CoverBudget = 256 << 20  // of the card for the folder, in clusters, at least (its budget grows with the albums)
+	CoverShare  = 32         // the folder's budget is at most the card's size over this (3%)
 	CoverFloor  = 1024 << 20 // the card's free space below which no cover is written
 	noneName    = ".none"
 	artName     = ".art" // "<file id> <coverArt id>" a line, for each cover fetched by an Art id
@@ -115,40 +122,60 @@ func CoverID(id string) bool {
 	return id != "" && id != "." && id != ".." && !strings.ContainsAny(id, "/\\\x00")
 }
 
-func (c Covers) budget() int64 {
+// budget is the folder's room for n covers: each at its largest (MaxBody) in whole clusters of the
+// card, at least CoverBudget and at most the card's size over CoverShare; Budget when set.
+func (c Covers) budget(n int) int64 {
 	if c.Budget > 0 {
 		return c.Budget
 	}
-	return CoverBudget
+	unit, _, total := c.space()
+	want := int64(n) * clusters(int64(c.MaxBody()), unit)
+	if total > 0 {
+		want = min(want, total/CoverShare)
+	}
+	return max(CoverBudget, want)
 }
 
 // Path is album id's cover file.
 func (c Covers) Path(id string) string { return filepath.Join(c.Dir, id+".jpg") }
 
-// cluster is the card's allocation unit and its free bytes; 4 KiB and plenty when it can't be read.
-func (c Covers) cluster() (int64, int64) {
+// space is the card's allocation unit, its free bytes and its size; 4 KiB, plenty and unknown (0)
+// when it can't be read.
+func (c Covers) space() (unit, free, total int64) {
+	if c.Space != nil {
+		return c.Space()
+	}
 	var fs syscall.Statfs_t
 	if err := syscall.Statfs(c.Dir, &fs); err != nil || fs.Bsize <= 0 {
-		return 4096, 1 << 62
+		return 4096, 1 << 62, 0
 	}
-	return int64(fs.Bsize), int64(fs.Bavail) * int64(fs.Bsize)
+	return int64(fs.Bsize), int64(fs.Bavail) * int64(fs.Bsize), int64(fs.Blocks) * int64(fs.Bsize)
+}
+
+// cluster is the card's allocation unit and its free bytes.
+func (c Covers) cluster() (int64, int64) {
+	unit, free, _ := c.space()
+	return unit, free
 }
 
 func clusters(size, unit int64) int64 { return (size + unit - 1) / unit * unit }
 
-// CoverPass is one round of fetching: the albums to fetch, in order, and the folder's size so far.
+// CoverPass is one round of fetching: the albums to fetch, in order, the folder's size so far, and
+// how many albums without a cover its budget left out (Stopped), with that budget and cluster.
 type CoverPass struct {
-	Todo       []string
-	c          Covers
-	used, unit int64
-	art, saved map[string]string // the coverArt id each file is asked by; and was fetched by (.art)
+	Todo         []string
+	Stopped      int
+	Budget, Unit int64
+	c            Covers
+	used, unit   int64
+	art, saved   map[string]string // the coverArt id each file is asked by; and was fetched by (.art)
 }
 
 // Plan deletes the covers of albums no longer in albums (and any file that is not a cover), and
 // returns the albums still to fetch, in albums' order: those with no file and no note in .none,
-// as many as the budget has room for beside what is there, each counted at the size of the
-// folder's average cover (one cluster while it has none). A cover that won't fit is never
-// fetched, only to be refused by Save. It makes the folder.
+// as many as the budget (for all of albums) has room for beside what is there, each counted at the
+// size of the folder's average cover (one cluster while it has none); Stopped counts the rest. A
+// cover that won't fit is never fetched, only to be refused by Save. It makes the folder.
 func (c Covers) Plan(albums []Album) (*CoverPass, error) {
 	if !library.Owned(c.Card, c.Path("x"), nil) {
 		return nil, errors.New("refusing covers outside owned trees: " + c.Dir)
@@ -183,7 +210,8 @@ func (c Covers) Plan(albums []Album) (*CoverPass, error) {
 			os.RemoveAll(filepath.Join(c.Dir, name))
 		}
 	}
-	p := &CoverPass{c: c, used: used, unit: unit, art: map[string]string{}, saved: map[string]string{}}
+	budget := c.budget(len(albums))
+	p := &CoverPass{c: c, used: used, unit: unit, Budget: budget, Unit: unit, art: map[string]string{}, saved: map[string]string{}}
 	room, each := used, unit // a cover to come takes what the folder's average one does
 	if n > 0 {
 		each = max(unit, clusters(used/n, unit))
@@ -198,8 +226,9 @@ func (c Covers) Plan(albums []Album) (*CoverPass, error) {
 		if have[a.ID] && arts[a.ID] == a.Art || none[noteKey(a.ID, a.Art)] {
 			continue
 		}
-		if room+each > c.budget() {
-			break
+		if room+each > budget {
+			p.Stopped++
+			continue
 		}
 		room += each
 		p.Todo = append(p.Todo, a.ID)
@@ -208,8 +237,8 @@ func (c Covers) Plan(albums []Album) (*CoverPass, error) {
 }
 
 // Open is a CoverPass for album covers saved one at a time between rounds (the car's asks,
-// q2-subsonic's coverask.go): the folder's size so far, nothing to fetch and nothing deleted. It
-// makes the folder.
+// q2-subsonic's coverask.go): the folder's size so far, nothing to fetch and nothing deleted, and a
+// budget with room for one more cover than the folder holds. It makes the folder.
 func (c Covers) Open() (*CoverPass, error) {
 	if !library.Owned(c.Card, c.Path("x"), nil) {
 		return nil, errors.New("refusing covers outside owned trees: " + c.Dir)
@@ -223,14 +252,17 @@ func (c Covers) Open() (*CoverPass, error) {
 		return nil, err
 	}
 	var used int64
+	n := 0
 	for _, e := range ents {
 		if strings.HasSuffix(e.Name(), ".jpg") && e.Type().IsRegular() {
 			if info, err := e.Info(); err == nil {
 				used += clusters(info.Size(), unit)
+				n++
 			}
 		}
 	}
-	return &CoverPass{c: c, used: used, unit: unit, art: map[string]string{}, saved: map[string]string{}}, nil
+	budget := c.budget(n + 1)
+	return &CoverPass{c: c, used: used, unit: unit, Budget: budget, Unit: unit, art: map[string]string{}, saved: map[string]string{}}, nil
 }
 
 // Noted is whether album id is noted in .none as having no cover.
@@ -279,13 +311,13 @@ func (c Covers) none() map[string]bool {
 var ErrCardFull = errors.New("covers: no room on the card")
 
 // Save writes album id's cover, b (a baseline JPEG), whole and renamed into place, unless that
-// would pass the budget or leave the card under CoverFloor.
+// would pass the pass's budget or leave the card under CoverFloor.
 func (p *CoverPass) Save(id string, b []byte) error {
 	if !CoverID(id) {
 		return errors.New("covers: bad album id " + id)
 	}
 	size := clusters(int64(len(b)), p.unit)
-	if _, free := p.c.cluster(); free-size < CoverFloor || p.used+size > p.c.budget() {
+	if _, free := p.c.cluster(); free-size < CoverFloor || p.used+size > p.Budget {
 		return ErrCardFull
 	}
 	f, err := create(p.c.Card, p.c.Path(id))
