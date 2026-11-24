@@ -8,7 +8,8 @@ Subsonic (OpenSubsonic API) client that syncs and streams. Built from q2-filebro
                target/shanlingq2/q2-subsonic-vX.Y-SHA.zip (unzip that at the card's root)
   package.py   checks the binary (static, MIPS32 little-endian, soft-float ABI), sets the nan2008
                ELF flag the Q2's kernel requires and Go doesn't, and writes the ZIP
-  launcher.sh  installed as .subsonic/run: q2-subsonic copied to /tmp and run there in a restart loop
+  launcher.sh  installed as .subsonic/run: q2-subsonic copied to /tmp and run there in a restart loop,
+               one loop at a time (a flock on /tmp/q2-subsonic.loop)
   q2app        installed as .subsonic/q2app: the card app manifest (name=Subsonic, qr=0,
                catalogue=1 and ratings=2 for the server library,
                storage=1 and downloads=Subsonic for Settings > Storage)
