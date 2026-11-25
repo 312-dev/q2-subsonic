@@ -20,6 +20,7 @@ import (
 	"github.com/andsuor/q2-subsonic/internal/applog"
 	"github.com/andsuor/q2-subsonic/internal/fw"
 	"github.com/andsuor/q2-subsonic/internal/library"
+	"github.com/andsuor/q2-subsonic/internal/pace"
 	"github.com/andsuor/q2-subsonic/internal/q2"
 	"github.com/andsuor/q2-subsonic/internal/subsonic"
 	"github.com/andsuor/q2-subsonic/internal/syncer"
@@ -97,6 +98,9 @@ type streamer struct {
 
 	xfer atomic.Bool // a song of the window is still to fetch (busy)
 	slow atomic.Bool // the song being fetched arrives slower than it plays (rateNote's slowSaid)
+	// pace, optional, is the firmware's Bluetooth coexistence state: while paced, a download is held to its
+	// rate unless it is the song playing and not well ahead of where it plays (paceFree).
+	pace *pace.Gate
 
 	// Download Ahead (ahead.go): the firmware's .ahead and the app's .stream, both "" without the
 	// files; .stream's pace while a song arrives, and when one with no byte reads stall.
@@ -803,10 +807,11 @@ func (s *streamer) remove(path string) {
 func (r *streamRun) fetchWatched(i int) (err error, replanned bool) {
 	ctx, cancel := context.WithCancel(r.ctx)
 	defer cancel()
+	cur, _, at := r.current() // whether it is the song playing, for paceFree; the watcher keeps it up
 	r.s.pmu.Lock()
 	kick := make(chan struct{}, 1)
 	r.prog = progress{job: i, movedAt: time.Now(), lastBody: r.prog.lastBody, lastAt: r.prog.lastAt, lastArriving: r.prog.lastArriving,
-		kick: kick}
+		kick: kick, playing: cur == i, playAt: at}
 	r.s.pmu.Unlock()
 	left := make(chan struct{})
 	done := make(chan struct{})
@@ -826,7 +831,10 @@ func (r *streamRun) fetchWatched(i int) (err error, replanned bool) {
 				case <-kick:
 				}
 			}
-			cur, _, _ := r.current()
+			cur, _, at := r.current()
+			r.s.pmu.Lock()
+			r.prog.playing, r.prog.playAt = cur == i, at
+			r.s.pmu.Unlock()
 			plan := r.plan(cur)
 			if !slices.Contains(plan, i) {
 				close(left)
@@ -942,7 +950,8 @@ func (r *streamRun) fetch(ctx context.Context, sg subsonic.Song, j job) (err err
 	s.pmu.Lock()
 	r.prog.total = max(resp.ContentLength+from, 0)
 	s.pmu.Unlock()
-	n, err := io.Copy(io.MultiWriter(cardWriter{f, r}, counter{r}), io.LimitReader(resp.Body, limit+1))
+	body := s.pace.Reader(ctx, resp.Body, r.paceFree)
+	n, err := io.Copy(io.MultiWriter(cardWriter{f, r}, counter{r}), io.LimitReader(body, limit+1))
 	if err == nil {
 		err = syncer.SizeErr(n, resp.ContentLength, limit)
 	}
@@ -972,6 +981,26 @@ func (r *streamRun) fetch(ctx context.Context, sg subsonic.Song, j job) (err err
 		}
 	}
 	return err
+}
+
+// paceLead is how far ahead of where it plays the song playing must have arrived before pacing holds it.
+const paceLead = 30 * time.Second
+
+// paceFree is whether the download running may go unheld while paced: the song playing while what has arrived is
+// not paceLead ahead of where it plays (counted from .playing's time at the song's rate), or one whose start or
+// rate is not known. A song ahead of the one playing is never free.
+func (r *streamRun) paceFree() bool {
+	r.s.pmu.Lock()
+	defer r.s.pmu.Unlock()
+	p := &r.prog
+	if !p.playing {
+		return false
+	}
+	if p.playBps <= 0 || p.playAt.IsZero() {
+		return true
+	}
+	played := p.playBps * int64(time.Since(p.playAt)/time.Millisecond) / 1000
+	return p.have < played+p.playBps*int64(paceLead/time.Second)
 }
 
 // expect is about the bytes a song takes at quality: its server size, or for a transcode its

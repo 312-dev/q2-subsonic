@@ -314,7 +314,7 @@ func (d *daemon) bigCovers() catalogue.Covers {
 // anything it can fetch (all there, noted, or no room), the rounds do nothing until coversKey
 // changes.
 func (d *daemon) slCovers(cl *subsonic.Client) {
-	if !d.slQuiet() && !charging() {
+	if !d.slQuiet() && !charging() || d.pace.Paced() { // paced: Bluetooth plays with Wi-Fi on 2.4 GHz
 		return
 	}
 	d.sl.mu.Lock()
@@ -402,7 +402,7 @@ func (d *daemon) slCovers(cl *subsonic.Client) {
 		mu.Lock()
 		stop := lost != nil
 		mu.Unlock()
-		if stop || ctx.Err() != nil || !d.slQuiet() && !charging() || !d.slActive() {
+		if stop || ctx.Err() != nil || !d.slQuiet() && !charging() || !d.slActive() || d.pace.Paced() {
 			break
 		}
 		select {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -20,6 +21,7 @@ import (
 	"github.com/andsuor/q2-subsonic/internal/creds"
 	"github.com/andsuor/q2-subsonic/internal/fw"
 	"github.com/andsuor/q2-subsonic/internal/library"
+	"github.com/andsuor/q2-subsonic/internal/pace"
 	"github.com/andsuor/q2-subsonic/internal/plan"
 	"github.com/andsuor/q2-subsonic/internal/q2"
 	"github.com/andsuor/q2-subsonic/internal/q2spot"
@@ -342,6 +344,7 @@ type daemon struct {
 	signin         *signin
 	runner         *syncer.Runner
 	stream         *streamer
+	pace           *pace.Gate // the firmware's Bluetooth coexistence state: background downloads held while it says so
 	art            *artCache
 	newClient      func(subsonic.Creds) (*subsonic.Client, error)
 	free           func(path string) int64
@@ -437,11 +440,24 @@ func newDaemon(dir, card, tmp string) *daemon {
 		}
 		return cl, err
 	}}
+	// Pacing (Q2 Pod's "Bluetooth coexistence pacing"): while A2DP streams with Wi-Fi on 2.4 GHz, q2guard's
+	// q2-bt-coex holds the background downloads (Download Ahead, Offline Sync, clips) to its rate and pauses the
+	// rounds of covers.
+	d.pace = pace.New(filepath.Join(tmp, "q2-bt-coex"))
+	d.pace.Changed = func(s pace.State) {
+		if s.Paced {
+			lg.Printf("pace: background downloads held to %d KB/s: Bluetooth plays with Wi-Fi on 2.4 GHz", s.Rate>>10)
+		} else {
+			lg.Printf("pace: background downloads at full speed again")
+		}
+	}
 	d.runner = syncer.New(card, src{d}, lg)
 	d.runner.OnDone = d.syncDone
+	d.runner.Pace = func(ctx context.Context, r io.Reader) io.Reader { return d.pace.Reader(ctx, r, nil) }
 	d.stream = newStreamer(card, filepath.Join(tmp, "q2-subsonic.play"), filepath.Join(tmp, "q2-subsonic.playing"),
 		d.caps, src{d}, d.manifest, syncer.Net, time.Second)
 	d.stream.log = lg
+	d.stream.pace = d.pace
 	d.stream.aheadFile = filepath.Join(tmp, "q2-subsonic.ahead") // Download Ahead (ahead.go)
 	d.stream.statusFile = filepath.Join(tmp, "q2-subsonic.stream")
 	d.stream.retryFile = filepath.Join(tmp, "q2-subsonic.retry") // Now Playing's Retry

@@ -77,6 +77,9 @@ type Runner struct {
 	// as plan.Compute counts them. A run started again asks again. False, there is no room for
 	// them, pauses the run as a full card before anything is fetched.
 	MakeRoom func(need int64) bool
+	// Pace, when set, wraps each song's body as it is read: the app holds it to the firmware's rate while
+	// Bluetooth streams with Wi-Fi on 2.4 GHz (internal/pace).
+	Pace func(ctx context.Context, r io.Reader) io.Reader
 
 	root string
 	src  MediaSource
@@ -1086,7 +1089,11 @@ func (r *Runner) fetch(ctx context.Context, w plan.Want) (int64, error) {
 	r.cur, r.curMax = from, w.Bytes
 	r.mu.Unlock()
 	limit := Limit(resp.ContentLength, w.Bytes)
-	n, err := r.copy(f, io.LimitReader(resp.Body, limit+1), from, yield)
+	var body io.Reader = resp.Body
+	if r.Pace != nil {
+		body = r.Pace(ctx, body)
+	}
+	n, err := r.copy(f, io.LimitReader(body, limit+1), from, yield)
 	if err == nil {
 		err = SizeErr(n-from, resp.ContentLength, limit) // checked before the rename (I8)
 	}

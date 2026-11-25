@@ -466,7 +466,7 @@ func (d *daemon) clipFetch(ctx context.Context, j *clipJob) {
 		}
 	}
 	defer resp.Body.Close()
-	slow.r = resp.Body
+	slow.r = d.pace.Reader(ctx, resp.Body, nil) // a clip is background work: held while paced
 	if drop > 0 {
 		if _, err := io.CopyN(io.Discard, slow, drop); err != nil {
 			lost(err)

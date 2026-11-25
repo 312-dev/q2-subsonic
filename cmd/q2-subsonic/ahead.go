@@ -253,6 +253,9 @@ type progress struct {
 	rateAt   time.Time
 	rateHave int64
 	slowSaid bool
+	// Whether its song is the one playing, and .playing's time then: paceFree's (the fetch's watcher keeps them).
+	playing bool
+	playAt  time.Time
 	// the card's longest write of the window, and all of them (cardWriter)
 	writeMax, writes time.Duration
 }

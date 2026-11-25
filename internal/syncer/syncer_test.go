@@ -1727,3 +1727,38 @@ func TestPlaylistArtRemoveFailureKeepsRecords(t *testing.T) {
 		t.Fatal(".m3u removed though its picture stayed")
 	}
 }
+
+// Pace, when set, is what each song's body is read through (the app's pacing while Bluetooth streams with Wi-Fi on
+// 2.4 GHz): every song's bytes pass through it, and the files are whole.
+func TestPaceWrapsEachSongsBody(t *testing.T) {
+	_, r, root := setup(t)
+	a, b := want(root, "a", "original"), want(root, "bb", "original")
+	var mu sync.Mutex
+	through := 0
+	r.Pace = func(ctx context.Context, body io.Reader) io.Reader {
+		return readFunc(func(p []byte) (int, error) {
+			n, err := body.Read(p)
+			mu.Lock()
+			through += n
+			mu.Unlock()
+			return n, err
+		})
+	}
+	if err := r.Start(plan.Plan{Add: []plan.Want{a, b}}); err != nil {
+		t.Fatal(err)
+	}
+	if s := wait(t, r); s.State != "done" || s.Done != 2 {
+		t.Fatalf("%+v", s)
+	}
+	sameFile(t, a.Path, "a")
+	sameFile(t, b.Path, "bb")
+	mu.Lock()
+	defer mu.Unlock()
+	if through != len(data("a"))+len(data("bb")) {
+		t.Fatal("through the pace:", through)
+	}
+}
+
+type readFunc func([]byte) (int, error)
+
+func (f readFunc) Read(p []byte) (int, error) { return f(p) }
