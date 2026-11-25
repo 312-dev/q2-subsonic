@@ -836,6 +836,16 @@ func (c *Client) PlayURL(id, quality string) string {
 	return c.MediaURL(id, quality)
 }
 
+// ClipURL is a stream of song id transcoded to MP3 at kbps, from second at of it (timeOffset, which
+// Navidrome honours when it transcodes; at < 0 sends none), its length estimated in Content-Length.
+func (c *Client) ClipURL(id string, kbps, at int) string {
+	q := url.Values{"id": {id}, "format": {"mp3"}, "maxBitRate": {strconv.Itoa(kbps)}, "estimateContentLength": {"true"}}
+	if at >= 0 {
+		q.Set("timeOffset", strconv.Itoa(at))
+	}
+	return c.endpoint("stream", q)
+}
+
 func (c *Client) CoverURL(id string) string {
 	return c.endpoint("getCoverArt", url.Values{"id": {id}})
 }

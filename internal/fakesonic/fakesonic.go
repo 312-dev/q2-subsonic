@@ -47,14 +47,21 @@ type Server struct {
 	Covers    map[string][]byte // getCoverArt's picture by id, or by "<id>@<size>" for that size alone; an id not here is error 70
 	CoverIn   time.Duration     // how long getCoverArt takes to answer
 	PingIn    time.Duration     // how long ping takes to answer, other requests served meanwhile
-	// stream and download send a song's bytes (Media) and honour Range unless NoRange; a transcode
-	// (a format other than raw) is its length at maxBitRate. Ranges is each request's "<id> <from>".
+	// stream and download send a song's bytes (Media, or Files' for its id) and honour Range unless
+	// NoRange. A format other than raw is a transcode, as Navidrome's: MP3 (audio/mpeg) at maxBitRate
+	// from second timeOffset, its bytes the pattern at that point of the whole transcode (or
+	// Transcoder's), Range ignored, its Content-Length the estimate when estimateContentLength is
+	// asked. NoTranscode sends the original instead (no transcoding set up); NoTimeOffset starts a
+	// transcode at its beginning; RejectTimeOffset answers a request with one by an error.
+	// Asked is each request's "<id> format=<f> timeOffset=<s> from=<byte>".
 	// The song Hold names sends HoldBytes and then waits for its request to end, counted in Cut.
-	NoRange   bool
-	Ranges    []string
-	Hold      string
-	HoldBytes int64
-	Cut       int
+	NoRange, NoTranscode, NoTimeOffset, RejectTimeOffset bool
+	Asked                                                []string
+	Files                                                map[string][]byte
+	Transcoder                                           func(id string, kbps, at int) []byte
+	Hold                                                 string
+	HoldBytes                                            int64
+	Cut                                                  int
 }
 
 // Media is the byte at offset i of every song the fake sends: a pattern a test can find its place in.
@@ -285,28 +292,55 @@ func (f *Server) media(w http.ResponseWriter, r *http.Request) {
 			"error": map[string]any{"code": 70, "message": "not found"}}})
 		return
 	}
-	size, ctype := s.Size, "audio/"+s.Suffix
-	if format := q.Get("format"); format != "" && format != "raw" {
-		rate, _ := strconv.Atoi(q.Get("maxBitRate"))
-		if rate == 0 {
-			rate = 320
-		}
-		size, ctype = int64(s.Duration)*int64(rate)*1000/8, "audio/mpeg"
-	}
 	from := int64(0)
 	if v, ok := strings.CutPrefix(r.Header.Get("Range"), "bytes="); ok {
 		from, _ = strconv.ParseInt(strings.TrimSuffix(v, "-"), 10, 64)
 	}
-	f.Ranges = append(f.Ranges, s.ID+" "+strconv.FormatInt(from, 10))
+	format, at := q.Get("format"), q.Get("timeOffset")
+	f.Asked = append(f.Asked, s.ID+" format="+format+" timeOffset="+at+" from="+strconv.FormatInt(from, 10))
+	if f.RejectTimeOffset && at != "" {
+		json.NewEncoder(w).Encode(map[string]any{"subsonic-response": map[string]any{"status": "failed", "version": "1.16.1",
+			"error": map[string]any{"code": 0, "message": "timeOffset not supported"}}})
+		return
+	}
+	size, ctype, base := s.Size, "audio/"+s.Suffix, int64(0)
+	file, real := f.Files[s.ID]
+	if real {
+		size = int64(len(file))
+	}
+	ranges := !f.NoRange
+	if format != "" && format != "raw" && !f.NoTranscode {
+		rate, _ := strconv.Atoi(q.Get("maxBitRate"))
+		if rate == 0 {
+			rate = 320
+		}
+		sec, _ := strconv.Atoi(at)
+		if f.NoTimeOffset {
+			sec = 0
+		}
+		bps := int64(rate) * 1000 / 8
+		size, ctype, base, ranges = (int64(s.Duration)-int64(sec))*bps, "audio/mpeg", int64(sec)*bps, false
+		if f.Transcoder != nil {
+			file, real = f.Transcoder(s.ID, rate, sec), true
+			size = int64(len(file))
+		}
+		if q.Get("estimateContentLength") != "true" {
+			size = -size // not declared
+		}
+	}
+	declared := size >= 0
+	size = max(size, -size)
 	hold, holdN := f.Hold == s.ID, f.HoldBytes
 	w.Header().Set("Content-Type", ctype)
-	if from > 0 && from < size && !f.NoRange {
+	if from > 0 && from < size && ranges {
 		w.Header().Set("Content-Range", "bytes "+strconv.FormatInt(from, 10)+"-"+strconv.FormatInt(size-1, 10)+"/"+strconv.FormatInt(size, 10))
 		w.Header().Set("Content-Length", strconv.FormatInt(size-from, 10))
 		w.WriteHeader(206)
 	} else {
 		from = 0
-		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+		if declared {
+			w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+		}
 	}
 	f.Mu.Unlock()
 	defer f.Mu.Lock()
@@ -317,7 +351,11 @@ func (f *Server) media(w http.ResponseWriter, r *http.Request) {
 			n = max(holdN-(at-from), 0)
 		}
 		for i := range n {
-			buf[i] = Media(at + i)
+			if real {
+				buf[i] = file[at+i]
+			} else {
+				buf[i] = Media(base + at + i)
+			}
 		}
 		if _, err := w.Write(buf[:n]); err != nil {
 			return

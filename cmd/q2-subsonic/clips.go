@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
+	"mime"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,13 +28,20 @@ import (
 // check: up once a ping is answered, a ping that timed out while a download got bytes leaving it
 // up). The game writes /tmp/q2-subsonic.clip whole whenever what it wants changes: a header
 // "#Q2CLIP/1\tseq=<n>", then a line per clip, "<slot>\t<sid>\t<from ms>\t<length ms>". For each
-// line the app fetches the song as it streams one (Streaming Quality, the stream's format), from
-// about the byte of <from ms> (its size times from over its length, a Range request) for <length
-// ms> and clipMargin more, and writes it whole to .subsonic/clips/<sid>.<ext>. Its answer line is
-// "<seq>\t<slot>\tget|done|fail\t<offset ms>\t<path>": get while it is fetched, done with the ms of
-// the song the file starts at, or fail (why goes in log.txt). A server that ignores the range sends
-// the song from its start: what comes before the clip's byte is read and dropped, so the file and
-// its offset are the same.
+// line the app fetches <length ms> and clipMargin more of the song as an MP3 the player can start
+// from its first byte, and writes it whole to .subsonic/clips/<sid>.mp3. Its answer line is
+// "<seq>\t<slot>\tget|done|fail\t<offset ms>\t<path>": get while it is fetched, done with the ms
+// of the song the file starts at, or fail (why goes in log.txt).
+//
+// An MP3 original decodes from any frame, so it is fetched as it is from about the byte of <from
+// ms> (its size times from over its length, a Range request); a server that ignores the range sends
+// it from its start, and what comes before that byte is read and dropped. Any other original cut
+// mid-way has no header to decode from (FLAC's STREAMINFO, an M4A's moov), so the server transcodes
+// it to MP3 at clipKbps from the second of <from ms> (timeOffset, which Navidrome honours when it
+// transcodes) and the file starts there. A server that refuses timeOffset is asked again without
+// it, and one that ignores it (its estimated Content-Length that of the whole song) has the
+// transcode's bytes before the clip dropped, as an MP3's. A server that sends the original instead
+// of an MP3 (no transcoding set up) fails the clip: nothing without a header is kept.
 //
 // A line the request no longer names is stopped and its clip deleted; a new seq supersedes the
 // whole request, and one with no lines deletes every clip. Only the first clipMax lines are
@@ -46,6 +56,7 @@ const (
 	clipMax    = 2               // clips fetched for a request at most
 	clipMargin = 3 * time.Second // audio fetched past a clip's length
 	clipIn     = 60 * time.Second
+	clipKbps   = 192                    // a transcoded clip's bit rate
 	clipPoll   = 100 * time.Millisecond // a clip waiting on a slow stream looks again
 )
 
@@ -279,17 +290,6 @@ func (d *daemon) clipEnd(j *clipJob, state string, off int64) {
 	d.clipFlush()
 }
 
-// clipTotal is the bytes of sg streamed at quality q: a transcode's its length at the bit rate.
-func clipTotal(sg subsonic.Song, q string) int64 {
-	switch q {
-	case "mp3-320":
-		return int64(sg.Duration) * 320000 / 8
-	case "mp3-128":
-		return int64(sg.Duration) * 128000 / 8
-	}
-	return sg.Size
-}
-
 // slowReader waits before each Read while the stream's song arrives slower than it plays.
 type slowReader struct {
 	r    io.Reader
@@ -355,15 +355,12 @@ func (d *daemon) clipFetch(ctx context.Context, j *clipJob) {
 		fail(applog.Redact(err.Error()))
 		return
 	}
-	ext, q := d.stream.format(sg, d.settings().stream())
-	total, lenMs := clipTotal(sg, q), int64(sg.Duration)*1000
-	if total <= 0 || lenMs <= 0 {
-		fail("its size or length unknown")
+	lenMs := int64(sg.Duration) * 1000
+	if lenMs <= 0 {
+		fail("its length unknown")
 		return
 	}
-	at := min(total*j.from/lenMs, total-1)
-	need := total * (j.length + clipMargin.Milliseconds()) / lenMs
-	path := filepath.Join(d.clipsDir(), j.sid+"."+ext)
+	path := filepath.Join(d.clipsDir(), j.sid+".mp3")
 	d.clip.mu.Lock()
 	if j.gone {
 		d.clip.mu.Unlock()
@@ -387,28 +384,91 @@ func (d *daemon) clipFetch(ctx context.Context, j *clipJob) {
 		fail(err.Error())
 		return
 	}
-	resp, err := cl.Get(ctx, cl.PlayURL(j.sid, q), at)
-	if err != nil {
-		lost(err)
-		fail(applog.Redact(err.Error()))
-		return
+	var (
+		resp            *http.Response
+		need, off, drop int64 // bytes kept; ms of the song the file starts at; bytes read and dropped before it
+		how             string
+	)
+	if strings.EqualFold(sg.Suffix, "mp3") {
+		// an MP3 decodes from any frame: the original itself, from the byte of the clip's start
+		total := sg.Size
+		if total <= 0 {
+			fail("its size unknown")
+			return
+		}
+		at := min(total*j.from/lenMs, total-1)
+		if resp, err = cl.Get(ctx, cl.PlayURL(j.sid, "original"), at); err != nil {
+			lost(err)
+			fail(applog.Redact(err.Error()))
+			return
+		}
+		need, how = total*(j.length+clipMargin.Milliseconds())/lenMs, "the original MP3, the range honoured"
+		first := at
+		if resp.StatusCode == 206 {
+			if b, n, ok := contentRange(resp.Header.Get("Content-Range")); ok {
+				first = b
+				if n > 0 {
+					total = n
+				}
+			}
+		} else {
+			if resp.ContentLength > 0 {
+				total = resp.ContentLength
+			}
+			first = min(total*j.from/lenMs, total-1)
+			drop, how = first, fmt.Sprintf("the original MP3, the range ignored, %d bytes read to its start", first)
+		}
+		off = first * lenMs / total
+	} else {
+		// any other original cut mid-way has no header to decode from (FLAC's STREAMINFO, an M4A's
+		// moov): the server transcodes it to MP3 from the second of the clip's start
+		sec := j.from / 1000
+		refused := false
+		resp, err = cl.Get(ctx, cl.ClipURL(j.sid, clipKbps, int(sec)), 0)
+		if err != nil && !subsonic.ConnectionLost(err) && ctx.Err() == nil {
+			refused = true
+			d.log.Printf("clips: %s: timeOffset refused (%s): the transcode from the song's start", j.sid, applog.Redact(err.Error()))
+			resp, err = cl.Get(ctx, cl.ClipURL(j.sid, clipKbps, -1), 0)
+		}
+		if err != nil {
+			lost(err)
+			fail(applog.Redact(err.Error()))
+			return
+		}
+		br := bufio.NewReaderSize(resp.Body, 512)
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{br, resp.Body}
+		if ct := resp.Header.Get("Content-Type"); !mp3Type(ct) && !mp3Start(br) {
+			resp.Body.Close()
+			fail(fmt.Sprintf("the server sent %s, not an MP3: it doesn't transcode, and a %s cut mid-way has no header to play from", ct, sg.Suffix))
+			return
+		}
+		bps := int64(clipKbps) * 1000 / 8
+		need = bps * (j.length + clipMargin.Milliseconds()) / 1000
+		full, rest := int64(sg.Duration)*bps, (int64(sg.Duration)-sec)*bps
+		// Navidrome's Content-Length is its estimate of what follows timeOffset: one near the whole
+		// song's says the transcode starts at the song's start
+		if ignored := sec > 0 && resp.ContentLength > 0 && 2*resp.ContentLength > full+rest; refused || ignored {
+			total, word := full, "refused"
+			if ignored {
+				word = "ignored"
+			}
+			if resp.ContentLength > 0 {
+				total = resp.ContentLength
+			}
+			drop = min(total*j.from/lenMs, total-1)
+			off = drop * lenMs / total
+			how = fmt.Sprintf("a %d kbps MP3 from the song's start, timeOffset %s, %d bytes read to its start", clipKbps, word, drop)
+		} else {
+			off, how = sec*1000, fmt.Sprintf("a %d kbps MP3 from %d s", clipKbps, sec)
+		}
 	}
 	defer resp.Body.Close()
 	slow.r = resp.Body
-	ranged, start := resp.StatusCode == 206, at
-	if ranged {
-		if b, n, ok := contentRange(resp.Header.Get("Content-Range")); ok {
-			start = b
-			if n > 0 {
-				total = n
-			}
-		}
-	} else {
-		if resp.ContentLength > 0 {
-			total = resp.ContentLength
-		}
-		start = min(total*j.from/lenMs, total-1)
-		if _, err := io.CopyN(io.Discard, slow, start); err != nil {
+	if drop > 0 {
+		if _, err := io.CopyN(io.Discard, slow, drop); err != nil {
 			lost(err)
 			fail("reading to its start: " + applog.Redact(err.Error()))
 			return
@@ -450,14 +510,21 @@ func (d *daemon) clipFetch(ctx context.Context, j *clipJob) {
 		fail(applog.Redact(err.Error()))
 		return
 	}
-	how := "the range honoured"
-	if !ranged {
-		how = fmt.Sprintf("the range ignored, %d bytes read to its start", start)
-	}
-	off := start * lenMs / total
 	d.log.Printf("clips: %s fetched, %d bytes in %d ms, %s; the file starts at %d ms", j.sid, n,
 		time.Since(begun).Milliseconds(), how, off)
 	d.clipEnd(j, "done", off)
+}
+
+// mp3Type is whether a Content-Type names MP3.
+func mp3Type(ct string) bool {
+	mt, _, _ := mime.ParseMediaType(ct)
+	return mt == "audio/mpeg" || mt == "audio/mp3" || mt == "audio/mpeg3"
+}
+
+// mp3Start is whether br starts as an MP3: an ID3 tag or an MPEG audio frame's sync.
+func mp3Start(br *bufio.Reader) bool {
+	b, _ := br.Peek(3)
+	return len(b) == 3 && (string(b) == "ID3" || b[0] == 0xff && b[1]&0xe0 == 0xe0)
 }
 
 // contentRange is a 206's "bytes <first>-<last>/<size>": first, and size (0 when "*").
