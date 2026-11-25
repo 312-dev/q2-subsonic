@@ -49,6 +49,9 @@ type Caps struct {
 	// held on it, and the reply's action rows are its menu; the firmware queues a song the app
 	// names in /tmp/q2-<id>.queue for Play Next or Play Last (q2-coda's docs/internals.md#card-apps).
 	HoldMenu bool
+	// "clip": Caller Ten asks the app for short clips of the server's songs in /tmp/q2-<id>.clip and
+	// reads the answers in /tmp/q2-<id>.clips (q2-coda's docs/server-library.md#clips).
+	Clip bool
 }
 
 // ReadCaps reads the firmware capabilities from path. A missing file gives all false.
@@ -110,6 +113,8 @@ func ReadCaps(path string) Caps {
 			caps.Grow = true
 		case "holdmenu":
 			caps.HoldMenu = true
+		case "clip":
+			caps.Clip = true
 		}
 	}
 	return caps

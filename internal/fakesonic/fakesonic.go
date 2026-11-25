@@ -47,7 +47,18 @@ type Server struct {
 	Covers    map[string][]byte // getCoverArt's picture by id, or by "<id>@<size>" for that size alone; an id not here is error 70
 	CoverIn   time.Duration     // how long getCoverArt takes to answer
 	PingIn    time.Duration     // how long ping takes to answer, other requests served meanwhile
+	// stream and download send a song's bytes (Media) and honour Range unless NoRange; a transcode
+	// (a format other than raw) is its length at maxBitRate. Ranges is each request's "<id> <from>".
+	// The song Hold names sends HoldBytes and then waits for its request to end, counted in Cut.
+	NoRange   bool
+	Ranges    []string
+	Hold      string
+	HoldBytes int64
+	Cut       int
 }
+
+// Media is the byte at offset i of every song the fake sends: a pattern a test can find its place in.
+func Media(i int64) byte { return byte(i % 251) }
 
 // New starts a TLS server with user u and password "pw".
 func New() *Server {
@@ -247,6 +258,8 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "image/jpeg")
 		w.Write(b)
+	case "stream", "download":
+		f.media(w, r)
 	default:
 		w.WriteHeader(404)
 	}
@@ -261,4 +274,64 @@ func Library(n int) []Song {
 			Artist: "Artist", Suffix: "flac", Year: 2000, Track: i/10 + 1, Duration: 180 + i%60, Size: int64(1000000 + i)}
 	}
 	return out
+}
+
+// media answers stream and download with f.Mu held, letting it go while the body is sent.
+func (f *Server) media(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	s := f.find(q.Get("id"))
+	if s == nil {
+		json.NewEncoder(w).Encode(map[string]any{"subsonic-response": map[string]any{"status": "failed", "version": "1.16.1",
+			"error": map[string]any{"code": 70, "message": "not found"}}})
+		return
+	}
+	size, ctype := s.Size, "audio/"+s.Suffix
+	if format := q.Get("format"); format != "" && format != "raw" {
+		rate, _ := strconv.Atoi(q.Get("maxBitRate"))
+		if rate == 0 {
+			rate = 320
+		}
+		size, ctype = int64(s.Duration)*int64(rate)*1000/8, "audio/mpeg"
+	}
+	from := int64(0)
+	if v, ok := strings.CutPrefix(r.Header.Get("Range"), "bytes="); ok {
+		from, _ = strconv.ParseInt(strings.TrimSuffix(v, "-"), 10, 64)
+	}
+	f.Ranges = append(f.Ranges, s.ID+" "+strconv.FormatInt(from, 10))
+	hold, holdN := f.Hold == s.ID, f.HoldBytes
+	w.Header().Set("Content-Type", ctype)
+	if from > 0 && from < size && !f.NoRange {
+		w.Header().Set("Content-Range", "bytes "+strconv.FormatInt(from, 10)+"-"+strconv.FormatInt(size-1, 10)+"/"+strconv.FormatInt(size, 10))
+		w.Header().Set("Content-Length", strconv.FormatInt(size-from, 10))
+		w.WriteHeader(206)
+	} else {
+		from = 0
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	}
+	f.Mu.Unlock()
+	defer f.Mu.Lock()
+	buf := make([]byte, 32<<10)
+	for at := from; at < size; {
+		n := min(int64(len(buf)), size-at)
+		if hold && at-from+n > holdN {
+			n = max(holdN-(at-from), 0)
+		}
+		for i := range n {
+			buf[i] = Media(at + i)
+		}
+		if _, err := w.Write(buf[:n]); err != nil {
+			return
+		}
+		at += n
+		if hold && at-from >= holdN {
+			if fl, ok := w.(http.Flusher); ok {
+				fl.Flush()
+			}
+			<-r.Context().Done()
+			f.Mu.Lock()
+			f.Cut++
+			f.Mu.Unlock()
+			return
+		}
+	}
 }
