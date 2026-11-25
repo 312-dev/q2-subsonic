@@ -71,11 +71,12 @@ func ticks(d time.Duration, kick <-chan struct{}, fn func()) {
 }
 
 // pressNames are the files in tmp answered at a kick: the firmware's requests (a press that starts
-// a list, a cover the car waits for), and resolv.conf, rewritten at each Wi-Fi lease, so a server
+// a list, a cover the car waits for, a clip the game waits for), and resolv.conf, rewritten at each Wi-Fi lease, so a server
 // down is asked again as soon as a network is joined (slTick).
 func (d *daemon) pressNames() (string, []string) {
 	return d.tmp, []string{filepath.Base(d.catplayPath()), filepath.Base(d.radioPath()),
-		filepath.Base(d.coverAskPath()), filepath.Base(d.coverAskIapPath()), filepath.Base(d.resolvPath())}
+		filepath.Base(d.coverAskPath()), filepath.Base(d.coverAskIapPath()), filepath.Base(d.clipReqPath()),
+		filepath.Base(d.resolvPath())}
 }
 
 // getTrace times a stream request's steps (net/http/httptrace), for the line log.txt gets at its

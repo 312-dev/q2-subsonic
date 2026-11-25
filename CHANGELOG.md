@@ -8,6 +8,7 @@ A few features need a newer Q2 Pod. Each one says so, and what the app does on o
 
 ### Added
 
+- Clips of your server's songs for Caller Ten, the Q2's game: the game asks the app for this caller's clip and the next one's, and the app fetches about 28 s of each song from where the game asks, as it would stream the song, while leaving the songs you are streaming alone (a clip waits while one of them arrives slower than it plays, and is never in the queue, the Stream Cache or your play history). A clip the game no longer wants is deleted, and so are all of them when a contest ends. Requires a Q2 Muse with the `clip` extension; on older firmware the game plays the card's songs.
 - A song menu on the app's own pages: hold Center or a finger on a song of an album's page, Top Songs or All Songs for Play Next, Play Last and Sync Offline, the same menu the Q2's own songs have. Play Next and Play Last add the song to the queue playing, which plays on; a song not on the card yet is downloaded into the Stream Cache first and joins the queue once it is there. Requires a Q2 Muse with the `holdmenu` extension; on older firmware holding Play/Pause on a song syncs it offline.
 
 - Album covers for the car over USB (Car Audio) on demand: the Q2 asks for a cover it lacks through its own request file, and the app fetches it at once, even while a song downloads.

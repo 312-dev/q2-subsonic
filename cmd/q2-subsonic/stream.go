@@ -96,6 +96,7 @@ type streamer struct {
 	err   *streamErr
 
 	xfer atomic.Bool // a song of the window is still to fetch (busy)
+	slow atomic.Bool // the song being fetched arrives slower than it plays (rateNote's slowSaid)
 
 	// Download Ahead (ahead.go): the firmware's .ahead and the app's .stream, both "" without the
 	// files; .stream's pace while a song arrives, and when one with no byte reads stall.
@@ -186,6 +187,10 @@ func (s *streamer) active() bool {
 // busy is whether the stream moves data: a song of the window is still to fetch. Waiting for the
 // firmware to play on is not busy, so the Q2 may sleep while a list is paused (I14).
 func (s *streamer) busy() bool { return s.active() && s.xfer.Load() }
+
+// arrivingSlow is whether a song of the stream is being fetched slower than it plays: what else
+// the app fetches (Caller Ten's clips) waits meanwhile.
+func (s *streamer) arrivingSlow() bool { return s.slow.Load() && s.busy() }
 
 func (s *streamer) stop() {
 	s.mu.Lock()
@@ -905,6 +910,7 @@ func (r *streamRun) fetch(ctx context.Context, sg subsonic.Song, j job) (err err
 	}
 	s.pmu.Unlock()
 	defer func() { r.fetchSummary(sg.Title, err) }()
+	defer s.slow.Store(false)
 	defer resp.Body.Close()
 	// A cancel ends a read that waits: net/http's body does so itself, and any other is closed.
 	stopRead := context.AfterFunc(ctx, func() { resp.Body.Close() })

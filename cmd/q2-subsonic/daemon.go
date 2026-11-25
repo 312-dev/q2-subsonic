@@ -391,6 +391,7 @@ type daemon struct {
 	resume             resumeState   // the firmware's request to resume a restored stream (resume.go)
 	reach              *reach        // whether the server can be reached, for the status row (reach.go)
 	off                offlineState  // the firmware's Sync Offline requests (offline.go)
+	clip               clipState     // Caller Ten's clips (clips.go)
 	diag               diagState     // Settings > Diagnostics' events (diagnostics.go)
 	diagErrAt          time.Time     // the sync stop Diagnostics recorded last
 
@@ -496,6 +497,7 @@ func newDaemon(dir, card, tmp string) *daemon {
 	d.lyricsInit()
 	d.resumeInit()
 	d.offlineInit()
+	d.clipInit()
 	d.stream.played = d.radioPlayed
 	d.stream.started = func(radio bool) {
 		if !radio {
@@ -769,6 +771,7 @@ func (d *daemon) tick() {
 	d.coverTick()
 	d.resumeTick()
 	d.offlineTick()
+	d.clipTick()
 	if snap := d.runner.Snapshot(); snap.State == "error" && !snap.ErrAt.IsZero() && !snap.ErrAt.Equal(d.diagErrAt) {
 		d.diagErrAt = snap.ErrAt // tick runs on one goroutine: no lock
 		ev := failure("Sync stopped", "sync", snap.Err)
@@ -821,7 +824,7 @@ func (d *daemon) qrLeft() {
 }
 
 // idle is whether the app may exit: no request for idleAfter (the end of a sync counts as one), no
-// sync, stream or Server Library check, no covers coming back to back on external power
+// sync, stream, Server Library check or clip fetch, no covers coming back to back on external power
 // (slBacklog), no song that may still count as played or report on its way, and no library request
 // awaiting its answer, as the firmware works on that only while the app runs (I15).
 func (d *daemon) idle(now time.Time) bool {
@@ -829,7 +832,7 @@ func (d *daemon) idle(now time.Time) bool {
 	last, lib := d.lastReq, d.lib != nil && !d.lib.done
 	d.mu.Unlock()
 	return now.Sub(last) >= idleAfter && !lib && !d.runner.Busy() && !d.stream.active() && !d.stream.plays.pending() &&
-		!d.sl.busy.Load() && !d.slBacklog()
+		!d.sl.busy.Load() && !d.slBacklog() && !d.clipBusy()
 }
 
 // close ends what the app runs before it exits; a sync paused here resumes at the next Sync.
@@ -838,6 +841,7 @@ func (d *daemon) close(sock string) {
 	d.stream.stop()
 	d.runner.Pause()
 	d.art.remove()
+	d.clipClose()
 	d.state.remove()
 	os.Remove(sock)
 }

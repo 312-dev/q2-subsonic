@@ -442,6 +442,7 @@ func (c counter) Write(b []byte) (int, error) {
 	p.have += int64(len(b))
 	p.movedAt = now
 	note = rateNote(p, title, now)
+	c.r.s.slow.Store(p.slowSaid)
 	if p.kick != nil && (before == 0 || p.gate > 0 && before < p.gate && p.have >= p.gate) {
 		select {
 		case p.kick <- struct{}{}:
